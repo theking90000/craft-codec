@@ -9,29 +9,35 @@ license = "MIT"
 repository = "https://github.com/theking90000/craft-io"
 documentation = "https://docs.rs/craft-io"
 readme = "README.md"
-keywords = ["async", "stream", "framing", "io", "cryptography"]
-categories = ["asynchronous", "concurrency"]
+keywords = ["framing", "io", "cryptography", "compression", "random-access"]
+categories = ["cryptography", "compression", "encoding"]
 include = [
     "/src",
     "/tests",
     "/benches",
+    "/examples",
+    "/docs",
     "/README.md",
     "/LICENSE",
     "/CHANGELOG.md",
     "/Cargo.toml",
 ]
 
+[features]
+default = ["aes-gcm"]
+aes-gcm = ["dep:aes-gcm"]
+lz4 = ["dep:lz4_flex"]
+
 [dependencies]
-futures-core = "0.3.32"
-pin-project-lite = "0.2.17"
+aes-gcm = { version = "0.11.1", optional = true, default-features = false, features = ["aes", "zeroize"] }
+lz4_flex = { version = "0.14.0", optional = true, default-features = false, features = ["std", "safe-encode", "safe-decode", "checked-decode"] }
 
 [dev-dependencies]
 stats_alloc = "0.1.10"
-futures = "0.3.32"
 
-#[[bench]]
-#name = "scheduler"
-#harness = false
+[[bench]]
+name = "frames"
+harness = false
 
 [lints.rust]
 unsafe_code = "forbid"
