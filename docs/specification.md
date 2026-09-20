@@ -1,10 +1,10 @@
 # Première spécification de CRAFT I/O
 
-Proposition du 20 septembre 2026, révisée après discussion des offsets, des
-nonces et du choix d'une API unique. Ce document fixe un périmètre et un plan
-de développement. Les signatures sont indicatives ; aucun codec n'est encore
-implémenté et aucune performance n'est mesurée. L'API entièrement synchrone
-est la recommandation actuelle, encore à confirmer par l'utilisateur.
+Spécification du 20 septembre 2026, révisée après discussion des offsets, des
+nonces et du choix d'une API unique, puis implémentée en version 0.1.0.
+L'API utilise `Vec<u8>`, AES-GCM par défaut et LZ4 en feature optionnelle.
+Les exemples du README sont exécutables ; les extraits de conception de ce
+document restent indicatifs. Le protocole de mesure est dans `benchmarks.md`.
 
 Il s'appuie sur la conversation « Utilité du chunked HTTP/1.1 », le besoin
 exprimé pour `craft-io`, et la structure actuelle de `../carbon-io`.
@@ -28,7 +28,7 @@ Les priorités sont, dans cet ordre :
 4. Simplicité de l'API.
 5. Généralité.
 
-Recommandation révisée : une seule API publique, synchrone, qui travaille sur
+Choix retenu : une seule API publique, synchrone, qui travaille sur
 des buffers. CRAFT n'accepte ni `Read` ni `AsyncRead` et n'expose aucun `poll_*`.
 L'intégrateur choisit ses I/O et appelle CRAFT lorsqu'une trame est disponible.
 Une application synchrone et une application async utilisent les mêmes méthodes.
@@ -269,12 +269,14 @@ tailles attendus dans les métadonnées fiables. Le tag d'une trame précédente
 ne prouve pas que le suffixe existe. Un reader abandonné avant la fin ne
 valide pas les trames qu'il n'a pas lues.
 
-Avant implémentation crypto, fixer le maximum de trames et le volume maximal
-par clé selon les tailles visées et l'objectif de sécurité. Un compteur de
-64 bits ne signifie pas que chiffrer `2^64` trames sous une clé est acceptable.
-La limite GCM par invocation est également indépendante du type de l'index.
-La génération et le stockage des clés restent à l'appelant ; CRAFT applique
-les limites retenues et ne journalise jamais la clé.
+La V1 fixe le maximum configuré d'une trame AES à 16 MiB. Elle autorise au
+plus `min(2^32, 64 GiB / max_frame_len)` indices par objet et par clé. Chaque
+indice réserve donc la taille brute maximale, même en mode variable. À 64 KiB,
+cela donne 1 048 576 trames. Ces limites sont une politique de bibliothèque,
+pas une affirmation de sécurité de 128 bits à ce volume ni un audit du format.
+Elles sont contrôlées par la configuration, le codec et les métadonnées.
+La génération et le stockage des clés restent à l'appelant. Les autres profils
+restent soumis aux limites de représentation, du codec et de la plateforme.
 
 Les profils sans chiffrement n'ont aucune authentification. Une corruption de
 même longueur peut passer inaperçue ; une décompression réussie ne prouve pas
@@ -425,9 +427,8 @@ sur échec sans prétendre effacer toutes les copies physiques en mémoire.
 Les trames sont livrées uniquement après authentification et décompression
 complètes lorsque ces transformations sont activées.
 
-Le choix `Vec<u8>` minimise les dépendances. Une variante fondée exclusivement
-sur `BytesMut` reste à discuter si c'est le type déjà utilisé partout par
-l'intégrateur. Il n'y aura pas deux familles d'API uniquement pour ce choix.
+Le choix retenu `Vec<u8>` minimise les dépendances. Il n'y a pas de seconde
+famille d'API fondée sur `BytesMut`.
 
 ## 8. Écriture, finalisation et adaptation CARBON
 
@@ -517,9 +518,11 @@ compression `C` et un composant de chiffrement `E`. Les variantes identité
 suppriment leurs traitements par static dispatch. Le découpage et l'index
 restent séparés du codec.
 
-Deux petits contrats internes suffisent : compresser/décompresser vers un buffer,
-puis chiffrer/déchiffrer en place. Ils restent privés au début, afin de ne pas
-figer une API de plugins avant d'avoir deux implémentations utiles.
+Deux petits contrats suffisent : compresser/décompresser vers un buffer,
+puis chiffrer/déchiffrer en place. `CompressionCodec` et `EncryptionCodec`
+sont des traits scellés, nommables par le code générique de l'appelant mais
+non implémentables depuis l'extérieur. Les codecs disponibles sont `Identity`,
+`Lz4` et `Aes256Gcm` selon les features.
 Pas de liste dynamique de stages ni d'empilement de wrappers qui possèdent
 chacun leurs buffers. L'ordre compression puis chiffrement fait partie du format.
 
@@ -642,10 +645,10 @@ Pas de module de scheduler, budget partagé, I/O ou moteur de pipeline.
 Les exemples peuvent montrer plusieurs intégrations ; la bibliothèque garde
 une seule API de transformation.
 
-À ce stade, le dépôt contient un manifeste, un README minimal, une licence et
-un `lib.rs` qui inclut le README. Les dépendances async copiées de CARBON ne
-constituent pas encore un choix d'architecture. La proposition synchrone
-conduit à les retirer lors de l'implémentation, sauf besoins des exemples.
+La V1 retire les dépendances async du crate. L'intégration CARBON est un exemple
+autonome avec son propre manifeste et son lockfile. Aucun fichier de CARBON
+n'est modifié. Les index compacts sont implémentés dans `index.rs`, séparément
+du mapping de plages dans `metadata.rs`.
 
 ## 12. Plan de développement
 
@@ -675,9 +678,9 @@ l'index et préparation/ouverture. Comparer chaque profil aux appels directs
 aux codecs et publier matériel, versions et features. Les dépendances de
 benchmark restent des dev-dependencies. Aucun objectif chiffré n'est promis ici.
 
-## 13. Décisions à confirmer
+## 13. Décisions retenues en V1
 
-La proposition est utilisable comme base de discussion avec ces choix :
+L'implémentation applique ces choix :
 
 1. `Metadata::range(start, end)` calcule une plage physique de trames entières
    et un itérateur avec les portions logiques à restituer. Le codec ignore
@@ -689,17 +692,12 @@ La proposition est utilisable comme base de discussion avec ces choix :
    dernière trame nécessaire ; la progression suivante est O(1) par trame.
 5. Clé AES indépendante par objet immuable, indice explicite, aucune modification
    du payload sous un couple clé/indice déjà utilisé.
-6. Recommandation d'une API uniquement synchrone et destructive sur buffers,
+6. API uniquement synchrone et destructive sur buffers,
    avec scratch de compression réutilisé. CARBON garde `poll_write(&T)` ;
    le prêt et le recyclage des buffers de lecture sont des sujets séparés.
-7. AES-GCM puis LZ4. Type de buffer `Vec<u8>` ou `BytesMut` à confirmer selon
-   l'intégration ; pas deux variantes publiques pour couvrir les deux.
+7. AES-GCM puis LZ4. Type de buffer unique `Vec<u8>`.
 
-Les limites de taille d'objet et d'usage de clé demandent encore les volumes
-visés. Elles doivent être fixées avant de considérer le profil crypto stable.
-Le choix minimal d'AAD vide et les identifiants de version/codec seront figés
-dans le lot 0, avec des exemples exacts d'octets.
-
-Cette étape a produit uniquement la présente spécification. Aucun code Rust,
-manifeste ou fichier de CARBON n'a été modifié ; aucun test, build ou benchmark
-n'a été exécuté.
+Le format porte la version 1. Les identifiants sont `0` pour l'identité,
+`1` pour LZ4 sur l'axe compression et `1` pour AES-256-GCM sur l'axe chiffrement.
+L'AAD est vide. Un test à réponse connue fixe l'ordre ciphertext puis tag.
+Le README détaille le contrat d'utilisation des clés et les limites AES.
