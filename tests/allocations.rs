@@ -1,5 +1,7 @@
 //! One serial test measures allocations after warming both scratch buffers.
-use craft_io::{CompressionCodec, Decoder, Encoder, EncryptionCodec, Framing, Identity, Metadata};
+use craft_codec::{
+    CompressionCodec, Decoder, Encoder, EncryptionCodec, Framing, Identity, Metadata,
+};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use std::alloc::System;
 
@@ -23,7 +25,8 @@ fn exercise<C: CompressionCodec, E: EncryptionCodec>(
             .unwrap();
     }
     let sizes =
-        craft_io::FrameSizes::new(65_536, metadata.frame(0).unwrap().payload_len() as u64).unwrap();
+        craft_codec::FrameSizes::new(65_536, metadata.frame(0).unwrap().payload_len() as u64)
+            .unwrap();
     // Prebuild descriptors so compact-index growth is outside the codec measurement.
     for _ in 4..132 {
         metadata.push(sizes).unwrap();
@@ -47,9 +50,11 @@ fn exercise<C: CompressionCodec, E: EncryptionCodec>(
 fn codecs_and_ranges_allocate_nothing_after_warmup() {
     exercise(|| Identity, || Identity);
     #[cfg(feature = "aes-gcm")]
-    exercise(|| Identity, || craft_io::Aes256Gcm::new(&[12; 32]));
+    exercise(|| Identity, || craft_codec::Aes256Gcm::new(&[12; 32]));
     #[cfg(feature = "lz4")]
-    exercise(craft_io::Lz4::new, || Identity);
+    exercise(craft_codec::Lz4::new, || Identity);
     #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
-    exercise(craft_io::Lz4::new, || craft_io::Aes256Gcm::new(&[13; 32]));
+    exercise(craft_codec::Lz4::new, || {
+        craft_codec::Aes256Gcm::new(&[13; 32])
+    });
 }

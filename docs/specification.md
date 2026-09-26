@@ -7,11 +7,11 @@ Les exemples du README sont exécutables ; les extraits de conception de ce
 document restent indicatifs. Le protocole de mesure est dans `benchmarks.md`.
 
 Il s'appuie sur la conversation « Utilité du chunked HTTP/1.1 », le besoin
-exprimé pour `craft-io`, et la structure actuelle de `../carbon-io`.
+exprimé pour `craft-codec`, et la structure actuelle de `../carbon-io`.
 
 ## 1. Objectif et priorités
 
-`craft-io` transforme une suite de trames en une représentation stockable, et
+`craft-codec` transforme une suite de trames en une représentation stockable, et
 effectue la transformation inverse. Chaque trame est décodable indépendamment.
 La lecture peut commencer à une frontière de trame, puis reste séquentielle.
 

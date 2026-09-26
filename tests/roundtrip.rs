@@ -1,5 +1,7 @@
 //! Roundtrips through all framing and transform combinations.
-use craft_io::{CompressionCodec, Decoder, Encoder, EncryptionCodec, Framing, Identity, Metadata};
+use craft_codec::{
+    CompressionCodec, Decoder, Encoder, EncryptionCodec, Framing, Identity, Metadata,
+};
 
 fn data(len: usize, mut seed: u64) -> Vec<u8> {
     (0..len)
@@ -79,25 +81,27 @@ fn raw_fixed_and_variable() {
 #[cfg(feature = "aes-gcm")]
 #[test]
 fn aes_fixed_and_variable() {
-    exercise(|| Identity, || craft_io::Aes256Gcm::new(&[17; 32]));
+    exercise(|| Identity, || craft_codec::Aes256Gcm::new(&[17; 32]));
 }
 
 #[cfg(feature = "lz4")]
 #[test]
 fn compression_fixed_and_variable() {
-    exercise(craft_io::Lz4::new, || Identity);
+    exercise(craft_codec::Lz4::new, || Identity);
 }
 
 #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
 #[test]
 fn compression_and_aes_fixed_and_variable() {
-    exercise(craft_io::Lz4::new, || craft_io::Aes256Gcm::new(&[23; 32]));
+    exercise(craft_codec::Lz4::new, || {
+        craft_codec::Aes256Gcm::new(&[23; 32])
+    });
 }
 
 #[cfg(feature = "lz4")]
 #[test]
 fn compression_fallback_and_reused_contexts_are_independent() {
-    use craft_io::Lz4;
+    use craft_codec::Lz4;
     let mut encoder = Encoder::new(Framing::Variable(4096), Lz4::new(), Identity).unwrap();
     let mut metadata = Metadata::new(encoder.config());
     let mut records = Vec::new();

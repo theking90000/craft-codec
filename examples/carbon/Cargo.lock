@@ -95,12 +95,12 @@ name = "craft-carbon-example"
 version = "0.1.0"
 dependencies = [
  "carbon-io",
- "craft-io",
+ "craft-codec",
  "futures",
 ]
 
 [[package]]
-name = "craft-io"
+name = "craft-codec"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",

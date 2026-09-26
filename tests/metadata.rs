@@ -1,5 +1,5 @@
 //! Independent range model, persistence validation and integer boundaries.
-use craft_io::{
+use craft_codec::{
     Compression, Config, Encryption, Error, FORMAT_VERSION, FrameSizes, Framing, Lengths, Metadata,
     MetadataParts,
 };

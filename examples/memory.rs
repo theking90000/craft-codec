@@ -1,5 +1,5 @@
 //! Encode an object, restore its side metadata, and read a logical byte range.
-use craft_io::{Decoder, Encoder, Framing, Identity, Metadata};
+use craft_codec::{Decoder, Encoder, Framing, Identity, Metadata};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut encoder = Encoder::new(Framing::Fixed(8), Identity, Identity)?;

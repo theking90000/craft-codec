@@ -1,13 +1,13 @@
 [package]
-name = "craft-io"
+name = "craft-codec"
 version = "0.1.0"
 edition = "2024"
 rust-version = "1.85"
 authors = ["theking90000 <martin.cogh@gmail.com>"]
 description = "Cryptographic Random-Access Framing Toolkit"
 license = "MIT"
-repository = "https://github.com/theking90000/craft-io"
-documentation = "https://docs.rs/craft-io"
+repository = "https://github.com/theking90000/craft-codec"
+documentation = "https://docs.rs/craft-codec"
 readme = "README.md"
 keywords = ["framing", "io", "cryptography", "compression", "random-access"]
 categories = ["cryptography", "compression", "encoding"]

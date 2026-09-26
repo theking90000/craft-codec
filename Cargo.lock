@@ -81,7 +81,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "craft-io"
+name = "craft-codec"
 version = "0.1.0"
 dependencies = [
  "aes-gcm",

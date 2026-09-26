@@ -2,7 +2,7 @@
 use carbon_io::{
     FrameBudget, FrameWriter, ReadFile, ReadScheduler, SchedulerConfig, WriteFile, WriteScheduler,
 };
-use craft_io::{Aes256Gcm, Decoder, Encoder, Error, FrameIter, FrameSizes, Framing, Lz4, Metadata};
+use craft_codec::{Aes256Gcm, Decoder, Encoder, Error, FrameIter, FrameSizes, Framing, Lz4, Metadata};
 use futures::{Stream, StreamExt, executor::block_on, stream};
 use std::{
     future::{Ready, ready},

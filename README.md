@@ -1,8 +1,8 @@
-# CRAFT I/O
+# CRAFT Codec
 
 Cryptographic Random-Access Framing Toolkit.
 
-`craft-io` encodes independent frames and maps logical byte ranges to their
+`craft-codec` encodes independent frames and maps logical byte ranges to their
 stored representation. Its single synchronous API works on reusable `Vec<u8>`
 buffers. The caller supplies I/O, scheduling, retries and trusted metadata storage.
 
@@ -17,7 +17,7 @@ Use `Identity` for either disabled transformation. Choose fixed frames with
 a possibly shorter final frame, or variable frames with an explicit maximum.
 
 ```rust
-use craft_io::{Decoder, Encoder, Framing, Identity, Metadata};
+use craft_codec::{Decoder, Encoder, Framing, Identity, Metadata};
 
 let mut encoder = Encoder::new(Framing::Fixed(8), Identity, Identity)?;
 let mut metadata = Metadata::new(encoder.config());
@@ -65,7 +65,7 @@ index and sizes, never the logical slice selected by the caller.
 
 ```toml
 [dependencies]
-craft-io = { version = "0.1", features = ["lz4"] }
+craft-codec = { version = "0.1", features = ["lz4"] }
 ```
 
 The `aes-gcm` feature is enabled by default; `lz4` is optional. With
@@ -76,7 +76,7 @@ combinations use the same API.
 ```rust
 # #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
 # {
-use craft_io::{Aes256Gcm, Decoder, Encoder, Framing, Lz4};
+use craft_codec::{Aes256Gcm, Decoder, Encoder, Framing, Lz4};
 
 // Example bytes only. Supply an independent secret key for each real object.
 let key = [42; 32];
@@ -88,7 +88,7 @@ let encoder = Encoder::new(
 let decoder = Decoder::new(encoder.config(), Lz4::new(), Aes256Gcm::new(&key))?;
 # let _ = decoder;
 # }
-# Ok::<(), craft_io::Error>(())
+# Ok::<(), craft_codec::Error>(())
 ```
 
 LZ4 blocks are independent and retained only if strictly smaller than the raw

@@ -1,5 +1,5 @@
 //! Reproducible standalone codec benchmark; no benchmark framework dependency.
-use craft_io::{
+use craft_codec::{
     CompressionCodec, Decoder, Encoder, EncryptionCodec, FrameSizes, Framing, Identity, Metadata,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
@@ -191,21 +191,21 @@ fn main() {
                 corpus,
                 &raw,
                 || Identity,
-                || craft_io::Aes256Gcm::new(&[1; 32]),
+                || craft_codec::Aes256Gcm::new(&[1; 32]),
             );
             #[cfg(feature = "lz4")]
-            bench("lz4", corpus, &raw, craft_io::Lz4::new, || Identity);
+            bench("lz4", corpus, &raw, craft_codec::Lz4::new, || Identity);
             #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
-            bench("lz4_aes", corpus, &raw, craft_io::Lz4::new, || {
-                craft_io::Aes256Gcm::new(&[2; 32])
+            bench("lz4_aes", corpus, &raw, craft_codec::Lz4::new, || {
+                craft_codec::Aes256Gcm::new(&[2; 32])
             });
             direct(corpus, &raw);
         }
     }
-    let config = craft_io::Config::new(
+    let config = craft_codec::Config::new(
         Framing::Variable(65_536),
-        craft_io::Compression::Lz4,
-        craft_io::Encryption::None,
+        craft_codec::Compression::Lz4,
+        craft_codec::Encryption::None,
     )
     .unwrap();
     let mut metadata = Metadata::new(config);

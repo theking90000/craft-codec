@@ -1,5 +1,5 @@
 //! Authentication, compressed-data failures and codec limits.
-use craft_io::{
+use craft_codec::{
     Compression, Config, Decoder, Encoder, Encryption, Error, FrameSizes, Framing, Identity,
     Metadata,
 };
@@ -38,7 +38,7 @@ fn failed_transforms_clear_output_and_reject_wrong_profiles() {
 #[cfg(feature = "aes-gcm")]
 #[test]
 fn aes256_nist_known_answer_with_suffix_tag() {
-    use craft_io::Aes256Gcm;
+    use craft_codec::Aes256Gcm;
     // NIST AES-256-GCM: zero key, zero 96-bit IV, 16 zero plaintext bytes, no AAD.
     let expected = [
         0xce, 0xa7, 0x40, 0x3d, 0x4d, 0x60, 0x6b, 0x6e, 0x07, 0x4e, 0xc5, 0xd3, 0xba, 0xf3, 0x9d,
@@ -63,8 +63,12 @@ fn aes256_nist_known_answer_with_suffix_tag() {
 fn frame_nonce_is_big_endian_and_does_not_reset_at_range_start() {
     use aes_gcm::{KeyInit, aead::AeadInOut};
     let key = [71; 32];
-    let mut encoder =
-        Encoder::new(Framing::Fixed(16), Identity, craft_io::Aes256Gcm::new(&key)).unwrap();
+    let mut encoder = Encoder::new(
+        Framing::Fixed(16),
+        Identity,
+        craft_codec::Aes256Gcm::new(&key),
+    )
+    .unwrap();
     let mut actual = vec![9; 16];
     encoder.encode_frame(0x01020304, &mut actual).unwrap();
     let reference = aes_gcm::Aes256Gcm::new((&key).into());
@@ -80,7 +84,7 @@ fn frame_nonce_is_big_endian_and_does_not_reset_at_range_start() {
 #[cfg(feature = "aes-gcm")]
 #[test]
 fn ciphertext_tag_key_and_index_substitution_all_fail_closed() {
-    use craft_io::Aes256Gcm;
+    use craft_codec::Aes256Gcm;
     let mut encoder = Encoder::new(Framing::Fixed(16), Identity, Aes256Gcm::new(&[1; 32])).unwrap();
     let mut good = vec![5; 16];
     let sizes = encoder.encode_frame(0, &mut good).unwrap();
@@ -115,7 +119,7 @@ fn ciphertext_tag_key_and_index_substitution_all_fail_closed() {
 #[cfg(feature = "aes-gcm")]
 #[test]
 fn aes_slot_and_frame_limits_are_checked_before_encryption() {
-    use craft_io::{AES_MAX_BYTES, AES_MAX_FRAME_LEN, Aes256Gcm};
+    use craft_codec::{AES_MAX_BYTES, AES_MAX_FRAME_LEN, Aes256Gcm};
     let mut encoder = Encoder::new(
         Framing::Variable(65_536),
         Identity,
@@ -145,7 +149,7 @@ fn aes_slot_and_frame_limits_are_checked_before_encryption() {
 #[cfg(feature = "lz4")]
 #[test]
 fn malformed_compression_wrong_lengths_and_trailing_data_fail() {
-    use craft_io::Lz4;
+    use craft_codec::Lz4;
     let mut encoder = Encoder::new(Framing::Variable(256), Lz4::new(), Identity).unwrap();
     let mut encoded = vec![4; 128];
     let sizes = encoder.encode_frame(0, &mut encoded).unwrap();
@@ -183,7 +187,7 @@ fn malformed_compression_wrong_lengths_and_trailing_data_fail() {
 #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
 #[test]
 fn authentication_precedes_decompression() {
-    use craft_io::{Aes256Gcm, Lz4};
+    use craft_codec::{Aes256Gcm, Lz4};
     let mut encoder =
         Encoder::new(Framing::Fixed(128), Lz4::new(), Aes256Gcm::new(&[8; 32])).unwrap();
     let mut buffer = vec![4; 128];
