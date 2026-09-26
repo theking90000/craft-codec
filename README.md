@@ -2,167 +2,221 @@
 
 Cryptographic Random-Access Framing Toolkit.
 
-`craft-codec` encodes independent frames and maps logical byte ranges to their
-stored representation. Its single synchronous API works on reusable `Vec<u8>`
-buffers. The caller supplies I/O, scheduling, retries and trusted metadata storage.
+CRAFT is a Rust library for compressing and encrypting data in independent
+blocks called frames. It lets you read a portion of the original data without
+reading or decoding the entire file.
 
-```text
-raw frame → optional compression → optional encryption → stored frame
-stored frame → authentication/decryption → decompression → raw frame
-```
+Your application splits the data into frames and stores the encoded frames in
+order. CRAFT records their sizes in separate metadata. When you request a byte
+range, it uses that metadata to find the stored frames you need to read.
+Each frame can be decrypted and decompressed independently.
 
-## Encode an object
+For example, with 64 KiB frames, reading 4 KiB from the middle of a file requires
+decoding only the one or two frames that contain those bytes. Earlier frames
+do not need to be read or decoded, even when compression and encryption are
+enabled.
 
-Use `Identity` for either disabled transformation. Choose fixed frames with
-a possibly shorter final frame, or variable frames with an explicit maximum.
+- `Encoder` compresses and encrypts one frame at a time.
+- `Metadata` maps a byte range in the original data to complete stored frames.
+- `Decoder` restores each frame so you can extract the requested bytes.
 
-```rust
-use craft_codec::{Decoder, Encoder, Framing, Identity, Metadata};
+Compression and encryption are optional. The API is synchronous and works on
+reusable `Vec<u8>` buffers. Your application handles file or network I/O,
+concurrency, retries, and metadata storage.
 
-let mut encoder = Encoder::new(Framing::Fixed(8), Identity, Identity)?;
-let mut metadata = Metadata::new(encoder.config());
-let original = b"small independent frames";
-let mut object = Vec::new();
-let mut buffer = Vec::new();
+## Installation
 
-for (index, raw) in original.chunks(8).enumerate() {
-    buffer.clear();
-    buffer.extend_from_slice(raw);
-    let sizes = encoder.encode_frame(index as u64, &mut buffer)?;
-    object.extend_from_slice(&buffer); // Replace with your backend's write.
-    metadata.push(sizes)?;            // Append only after a successful write.
-}
-
-// Persist metadata separately and publish it with the completed object.
-let metadata = Metadata::from_parts(metadata.into_parts())?;
-
-// Read exactly the physical frames covering logical bytes [3, 19).
-let (query, frames) = metadata.range(3, Some(19))?;
-let mut source = &object[query.start as usize..query.end as usize];
-let mut decoder = Decoder::new(metadata.config(), Identity, Identity)?;
-let mut result = Vec::new();
-
-for frame in frames {
-    buffer.resize(frame.spec.stored_len(), 0);
-    std::io::Read::read_exact(&mut source, &mut buffer)?;
-    decoder.decode_frame(frame.spec, &mut buffer)?;
-    result.extend_from_slice(&buffer[frame.selected]);
-}
-assert_eq!(result, original[3..19]);
-# Ok::<(), Box<dyn std::error::Error>>(())
-```
-
-`range(start, None)` reads through logical EOF. End bounds are exclusive.
-Reversed or out-of-bounds ranges fail; empty ranges produce an empty query
-and iterator and should not open a backend.
-
-For an async backend, open once with
-`open(query.start, Some(query.end - query.start))`, await complete frame reads,
-then call the same synchronous decoder. The codec sees the original frame
-index and sizes, never the logical slice selected by the caller.
-
-## Enable compression and encryption
+Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 craft-codec = { version = "0.1", features = ["lz4"] }
 ```
 
-The `aes-gcm` feature is enabled by default; `lz4` is optional. With
-`default-features = false`, identity framing and metadata have no runtime
-dependencies. All eight fixed/variable, compressed/raw, encrypted/plain
-combinations use the same API.
+Requires Rust 1.85 or newer.
+
+| Feature | Default | Provides |
+| --- | --- | --- |
+| `aes-gcm` | Enabled | AES-256-GCM authenticated encryption |
+| `lz4` | Disabled | LZ4 block compression |
+
+With `default-features = false`, framing and metadata have no runtime
+dependencies. Use `Identity` in place of a compressor or cipher to disable that
+transformation.
+
+## Encoding data and reading a range
+
+This example stores frames in memory, then reads bytes `3..19` of the original
+data. It uses eight-byte frames and disables compression and encryption to show
+the write and read steps.
 
 ```rust
-# #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
-# {
-use craft_codec::{Aes256Gcm, Decoder, Encoder, Framing, Lz4};
+use craft_codec::{Decoder, Encoder, Framing, Identity, Metadata};
 
-// Example bytes only. Supply an independent secret key for each real object.
-let key = [42; 32];
-let encoder = Encoder::new(
-    Framing::Variable(65_536),
-    Lz4::new(),
-    Aes256Gcm::new(&key),
-)?;
-let decoder = Decoder::new(encoder.config(), Lz4::new(), Aes256Gcm::new(&key))?;
-# let _ = decoder;
-# }
-# Ok::<(), craft_codec::Error>(())
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let mut encoder = Encoder::new(Framing::Fixed(8), Identity, Identity)?;
+    let mut metadata = Metadata::new(encoder.config());
+    let original = b"small independent frames";
+    let mut object = Vec::new();
+    let mut buffer = Vec::new();
+
+    for (index, raw) in original.chunks(8).enumerate() {
+        buffer.clear();
+        buffer.extend_from_slice(raw);
+        let sizes = encoder.encode_frame(index as u64, &mut buffer)?;
+        object.extend_from_slice(&buffer);
+        metadata.push(sizes)?;
+    }
+
+    // Locate the complete stored frames containing bytes 3..19.
+    let (stored_range, frames) = metadata.range(3, Some(19))?;
+    let mut source = &object[stored_range.start as usize..stored_range.end as usize];
+    let mut decoder = Decoder::new(metadata.config(), Identity, Identity)?;
+    let mut result = Vec::new();
+
+    for frame in frames {
+        buffer.resize(frame.spec.stored_len(), 0);
+        std::io::Read::read_exact(&mut source, &mut buffer)?;
+        decoder.decode_frame(frame.spec, &mut buffer)?;
+        result.extend_from_slice(&buffer[frame.selected]);
+    }
+
+    assert_eq!(result, original[3..19]);
+    Ok(())
+}
 ```
 
-LZ4 blocks are independent and retained only if strictly smaller than the raw
-frame. Otherwise the raw payload is stored. Compression uses reusable scratch;
-encryption modifies the chosen payload in place and appends its tag.
-The buffer allocation can change through a scratch swap. Preserve a borrowed
-input by copying it into a reusable work buffer before calling the encoder.
+For a file or storage service, replace `object.extend_from_slice` with your
+write operation. Append the frame's sizes to `metadata` only after the write
+succeeds. Save the metadata separately and make it available with the completed
+object. Here, an object means the full sequence of stored frames for one file
+or blob.
 
-On a transformation error, the supplied buffer is cleared. This does not
-promise erasure of plaintext from spare capacity or compression scratch.
-Decryption authenticates the complete frame before decompression or delivery.
+### Original byte ranges and stored byte ranges
 
-## Stored format and metadata
+A logical byte range refers to the original data, before compression or
+encryption. A stored byte range refers to the encoded bytes in storage.
+Compression changes frame sizes, and encryption adds an authentication tag to
+each frame, so the two ranges can have different offsets and lengths.
 
-Version 1 stores concatenated `[payload][optional 16-byte tag]` records, with
-no headers, padding, stored nonces or terminal record. Empty objects contain
-no frames; individual frames must be nonempty.
+`metadata.range(start, end)` returns a stored byte range and an iterator over
+the frames to decode. Read each complete frame, pass its `spec` to the decoder,
+and then take `frame.selected` from the decoded buffer. The first and last
+frames may contain bytes outside the requested range.
 
-| Logical framing | Compression | Per-frame metadata |
-| --- | --- | --- |
-| Fixed | None | None; only the final raw length is stored separately |
-| Variable | None | Raw lengths |
-| Fixed | LZ4 | Payload lengths, excluding tags |
-| Variable | LZ4 | Raw and payload lengths |
+End bounds are exclusive. `range(start, None)` selects everything through the
+end of the original data. Invalid ranges return an error. An empty range returns
+an empty stored range and iterator, so no I/O is needed.
 
-`Lengths` selects `u16`, `u32` or `u64` from the configured maximum. Entries
-encode `length - 1`, so a 65,536-byte frame fits in a `u16`. The last variable
-frame's size is already in its index. `MetadataParts` exposes the version,
-profile and compact arrays for application-owned persistence; no serialization
-framework is required. `from_parts` validates structure, sizes and overflow.
-It does not authenticate the metadata. Codec identifiers are `0 = identity`,
-`1 = LZ4` for compression and `0 = identity`, `1 = AES-256-GCM` for encryption.
+Fixed-size frames without compression allow CRAFT to calculate offsets directly.
+For compressed or variable-size frames, it scans the size metadata to locate
+the range. This scan does not read or decode the stored data.
 
-There is no prefix-offset table. Preparing a bounded variable-size query scans
-metadata up to its last selected frame. Iteration then takes constant work per
-frame and constant auxiliary memory. Fixed uncompressed queries use arithmetic.
-Only logical and physical scalar totals are cached.
+## Choosing frame sizes
 
-The iterator's `remaining()` reports the exact frame count without collecting
-it. Metadata growth during encoding is proportional to frame count for indexed
-profiles. Codec buffers and metadata allocations are distinct costs.
+Your application chooses where to split the input:
 
-## Key and object contract
+| Configuration | Input frames |
+| --- | --- |
+| `Framing::Fixed(size)` | Every frame has `size` bytes, except the last, which may be shorter |
+| `Framing::Variable(max)` | Each frame may have a different size, up to `max` bytes |
 
-AES-256-GCM uses `nonce = [0; 4] || frame_index.to_be_bytes()`, empty AAD,
-and the full 16-byte authentication tag. The original object index is used
-even for reads starting in the middle. **Never encrypt different payloads
-under the same key and frame index.** Use a fresh independent key for each
-immutable object. Key generation and storage remain outside the crate.
+Individual frames must be nonempty. An empty object has no frames.
+Smaller frames reduce the amount of extra data decoded for a small range read.
+Larger frames reduce the number of metadata entries and authentication tags.
 
-Re-reading frames is unrestricted. Replaying the same ciphertext is allowed;
-re-encoding under an existing key/index must reproduce exactly the same
-payload. A new attempt that can change the payload needs a new key. The codec
-does not maintain a nonce registry across calls or instances.
+## Enabling compression and encryption
 
-The version 1 AES usage policy caps configured frames at 16 MiB and permits
-at most `min(2^32, 64 GiB / max_frame_len)` frame slots per object/key. This
-reserves the maximum raw length for each index, also in variable mode. A
-64 KiB configuration therefore allows 1,048,576 frames. These are conservative
-library limits, not a claim of 128-bit security at the maximum volume or a
-security audit of the composed format. Cipher operations come from RustCrypto.
+Replace `Identity` with `Lz4` and `Aes256Gcm`. The write and range-read steps
+remain the same. This setup uses variable-size frames of at most 64 KiB:
 
-Metadata, its association with the object, and the key must be trusted.
-Truncation of entire final frames is detected by the caller expecting the
-declared frame lengths/count, not by the previous frame's tag. Unread frames
-are not verified. Unencrypted modes provide no integrity guarantee. No padding
-hides logical lengths or compression ratios.
+```rust
+fn main() -> Result<(), craft_codec::Error> {
+    # #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
+    # {
+    use craft_codec::{Aes256Gcm, Decoder, Encoder, Framing, Lz4};
 
-## Integration and development
+    // Example only. Generate a fresh secret key for each real object.
+    let key = [42; 32];
+    let encoder = Encoder::new(
+        Framing::Variable(65_536),
+        Lz4::new(),
+        Aes256Gcm::new(&key),
+    )?;
+    let decoder = Decoder::new(encoder.config(), Lz4::new(), Aes256Gcm::new(&key))?;
+    # let _ = decoder;
+    # }
+    Ok(())
+}
+```
 
-See [the examples](examples/README.md) for memory I/O and a standalone CARBON
-adapter using its unchanged borrowing `FrameWriter` interface. CRAFT adds no
-async traits, buffer pool, tasks or retry policy. Heavy CPU work can run in an
-application-owned worker without changing the codec API.
+CRAFT compresses each frame before encrypting it. It keeps the compressed bytes
+only when they are smaller than the original frame. Otherwise it stores the
+original bytes, encrypted if encryption is enabled.
+
+AES-256-GCM adds a 16-byte authentication tag to each frame. The decoder verifies
+that tag before decompressing or returning the frame's contents.
+
+### Keys and data integrity
+
+Use a fresh independent secret key for each immutable object. CRAFT derives each
+frame's nonce from its original index in that object. Never encrypt different
+payloads with the same key and frame index. Key generation and storage are your
+application's responsibility.
+
+A retry may write the same encoded bytes again. If a new attempt can change the
+payload, use a new key. CRAFT does not track key or nonce reuse across calls.
+
+Keep the metadata, its association with the object, and the key in trusted
+storage. Frame authentication does not authenticate the metadata. Your reader
+must detect missing final frames by checking the expected lengths and frame
+count. A range read verifies only the frames it decodes. Without encryption,
+CRAFT provides no integrity guarantee. The format does not hide data lengths
+or compression ratios.
+
+The V1 encryption limits are 16 MiB per configured frame and at most
+`min(2^32, 64 GiB / max_frame_len)` frames per key. With 64 KiB frames, that is
+1,048,576 frames. Variable-size frames use the configured maximum for this
+limit. These are conservative library limits. The composed format has not
+undergone a security audit; cipher operations use RustCrypto.
+
+## Storing metadata
+
+An encoded object contains consecutive frame payloads, each followed by its
+authentication tag when encryption is enabled. It has no frame headers or
+embedded metadata. You need the separate metadata to decode it.
+
+`Metadata::into_parts()` returns the configuration, frame count, and size
+information for your application to serialize. Restore it with
+`Metadata::from_parts(parts)`, which checks its structure and sizes but does
+not authenticate it. CRAFT does not require a serialization framework.
+
+Fixed-size frames without compression need only the final frame's length in
+addition to the configuration and frame count. Variable-size frames need their
+original lengths; compressed frames also need their stored payload lengths.
+CRAFT stores these lengths in compact integer arrays.
+
+See the [format specification](docs/specification.md) for the V1 format and
+metadata rules.
+
+## Integrating with I/O
+
+For an async reader, fetch the stored range and await each complete frame before
+calling the synchronous decoder. Keep the original frame index and sizes from
+`frame.spec`, including when a read starts in the middle of an object. Your
+application can move CPU work to a worker thread when needed.
+
+Encoding and decoding modify the supplied buffer. Copy borrowed input into a
+reusable work buffer if you need to preserve it for retries. Compression uses
+reusable scratch space and may swap allocations with that buffer. A
+transformation error clears the buffer, but does not securely erase its spare
+capacity or the compression scratch space.
+
+See the [examples guide](examples/README.md) for memory I/O and an adapter for
+CARBON I/O, which schedules concurrent reads and writes. The adapter keeps
+encoded bytes in its own buffer across partial writes and retries.
+
+## Development
 
 ```sh
 cargo test --all-features
@@ -173,7 +227,7 @@ cargo run --example memory --no-default-features
 cargo bench --all-features --bench frames
 ```
 
-Rust 1.85 or later. The crate forbids unsafe code. See the
-[specification](docs/specification.md) and [benchmark notes](docs/benchmarks.md).
+The crate forbids unsafe code. See the [benchmark notes](docs/benchmarks.md) for
+performance measurements.
 
 MIT licensed.
