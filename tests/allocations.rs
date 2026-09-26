@@ -31,8 +31,17 @@ fn exercise<C: CompressionCodec, E: EncryptionCodec>(
     for _ in 4..132 {
         metadata.push(sizes).unwrap();
     }
+    // Warm the complete steady-state path, including range selection.
+    for index in 4..8 {
+        encoder.encode_frame(index, &mut buffer).unwrap();
+        decoder
+            .decode_frame(metadata.frame(index).unwrap(), &mut buffer)
+            .unwrap();
+        let (_, frames) = metadata.range(50, Some(50_213)).unwrap();
+        assert_eq!(frames.remaining(), 1);
+    }
     let region = Region::new(GLOBAL);
-    for index in 4..132 {
+    for index in 8..132 {
         encoder.encode_frame(index, &mut buffer).unwrap();
         decoder
             .decode_frame(metadata.frame(index).unwrap(), &mut buffer)
