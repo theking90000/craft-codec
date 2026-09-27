@@ -15,6 +15,7 @@ pub const AES_MAX_FRAME_LEN: u64 = 1 << 24;
 
 /// Logical frame boundaries, before compression or encryption.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Framing {
     /// All frames have this size, except a possibly shorter final frame.
     Fixed(u64),
@@ -33,6 +34,7 @@ impl Framing {
 
 /// Compression identifier in trusted external metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum Compression {
     /// Store raw bytes.
@@ -43,6 +45,7 @@ pub enum Compression {
 
 /// Encryption identifier in trusted external metadata.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 #[repr(u8)]
 pub enum Encryption {
     /// No authentication or encryption.
@@ -63,10 +66,30 @@ impl Encryption {
 
 /// Validated object-wide settings. Contains no key.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Config {
     framing: Framing,
     compression: Compression,
     encryption: Encryption,
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Config {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        #[derive(serde::Deserialize)]
+        struct Fields {
+            framing: Framing,
+            compression: Compression,
+            encryption: Encryption,
+        }
+
+        let fields = <Fields as serde::Deserialize>::deserialize(deserializer)?;
+        Self::new(fields.framing, fields.compression, fields.encryption)
+            .map_err(serde::de::Error::custom)
+    }
 }
 
 impl Config {

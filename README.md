@@ -31,11 +31,12 @@ In `Cargo.toml`:
 
 ```toml
 [dependencies]
-craft-codec = { version = "0.1", features = ["lz4"] }
+craft-codec = { version = "0.1", features = ["lz4", "serde"] }
 ```
 
 Requires Rust 1.85 or newer. AES-256-GCM encryption is enabled by default;
-the `lz4` feature adds LZ4 compression.
+the `lz4` feature adds LZ4 compression. The optional `serde` feature implements
+`Serialize` and `Deserialize` for `Metadata`.
 
 ## Basic usage
 

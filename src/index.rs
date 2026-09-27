@@ -3,8 +3,9 @@ use crate::{Error, Result};
 /// Compact positive lengths, stored as `length - 1`.
 ///
 /// The width is selected from the configured maximum, not the object length.
-/// Public variants allow external persistence without a serialization dependency.
+/// Public variants allow external persistence without enabling `serde`.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub enum Lengths {
     /// Lengths up to and including 65,536 bytes.
     U16(Vec<u16>),

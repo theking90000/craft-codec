@@ -66,6 +66,7 @@ pub struct FrameRead {
 /// External metadata representation. It contains no key and is not self-authenticating.
 /// Persist it in trusted storage and restore with [`Metadata::from_parts`].
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MetadataParts {
     /// Format identifier; currently [`FORMAT_VERSION`].
     pub version: u8,
@@ -88,6 +89,27 @@ pub struct Metadata {
     parts: MetadataParts,
     logical_len: u64,
     stored_len: u64,
+}
+
+#[cfg(feature = "serde")]
+impl serde::Serialize for Metadata {
+    fn serialize<S>(&self, serializer: S) -> std::result::Result<S::Ok, S::Error>
+    where
+        S: serde::Serializer,
+    {
+        serde::Serialize::serialize(&self.parts, serializer)
+    }
+}
+
+#[cfg(feature = "serde")]
+impl<'de> serde::Deserialize<'de> for Metadata {
+    fn deserialize<D>(deserializer: D) -> std::result::Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        let parts = <MetadataParts as serde::Deserialize>::deserialize(deserializer)?;
+        Self::from_parts(parts).map_err(serde::de::Error::custom)
+    }
 }
 
 impl Metadata {
