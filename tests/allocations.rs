@@ -1,4 +1,6 @@
-//! One serial test measures allocations after warming both scratch buffers.
+//! Measure allocations after warming both scratch buffers.
+//! Run without libtest: its runner can allocate concurrently with the test,
+//! and the global allocator counts allocations from every thread.
 use craft_codec::{
     CompressionCodec, Decoder, Encoder, EncryptionCodec, Framing, Identity, Metadata,
 };
@@ -55,8 +57,7 @@ fn exercise<C: CompressionCodec, E: EncryptionCodec>(
     assert!(buffer.iter().all(|&byte| byte == 0));
 }
 
-#[test]
-fn codecs_and_ranges_allocate_nothing_after_warmup() {
+fn main() {
     exercise(|| Identity, || Identity);
     #[cfg(feature = "aes-gcm")]
     exercise(|| Identity, || craft_codec::Aes256Gcm::new(&[12; 32]));
