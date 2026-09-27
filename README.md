@@ -48,7 +48,7 @@ The API follows the same steps as the data:
 Read positions refer to the original data, before compression or encryption.
 For example, this selects bytes 3 through 18:
 
-```rust
+```ignore
 let (stored_range, frames) = metadata.range(3, Some(19))?;
 ```
 
