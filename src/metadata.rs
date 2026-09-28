@@ -371,7 +371,7 @@ impl Metadata {
                     iter(first, stop, logical_start),
                 ));
             }
-            let mut physical = 0;
+            let mut physical: u64 = 0;
             for i in 0..first {
                 let sizes = self.sizes(i).ok_or(Error::InvalidMetadata)?;
                 physical = physical
@@ -398,8 +398,8 @@ impl Metadata {
             let logical_start = first.checked_mul(size).ok_or(Error::Overflow)?;
             return Ok((physical_start..physical, iter(first, stop, logical_start)));
         }
-        let mut logical = 0;
-        let mut physical = 0;
+        let mut logical: u64 = 0;
+        let mut physical: u64 = 0;
         let mut first = 0;
         loop {
             let sizes = self.sizes(first).ok_or(Error::InvalidMetadata)?;
