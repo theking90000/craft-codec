@@ -16,14 +16,24 @@ pub enum Lengths {
 }
 
 impl Lengths {
+    fn empty(max_length: u64) -> Self {
+        match max_length {
+            ..=65_536 => Self::U16(Vec::new()),
+            65_537..=4_294_967_296 => Self::U32(Vec::new()),
+            _ => Self::U64(Vec::new()),
+        }
+    }
+
     /// Create an empty table with the width required by `max_length`.
     pub fn new(max_length: u64) -> Result<Self> {
-        match max_length {
-            0 => Err(Error::InvalidFrameSize),
-            1..=65_536 => Ok(Self::U16(Vec::new())),
-            65_537..=4_294_967_296 => Ok(Self::U32(Vec::new())),
-            _ => Ok(Self::U64(Vec::new())),
+        if max_length == 0 {
+            return Err(Error::InvalidFrameSize);
         }
+        Ok(Self::empty(max_length))
+    }
+
+    pub(crate) fn for_config(config: crate::Config) -> Self {
+        Self::empty(config.max_frame_len())
     }
 
     /// Number of entries.

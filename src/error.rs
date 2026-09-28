@@ -74,8 +74,9 @@ pub(crate) fn resize(buffer: &mut Vec<u8>, len: usize) -> Result<()> {
         return Err(Error::Overflow);
     }
     if len > buffer.len() {
+        let additional = len.checked_sub(buffer.len()).ok_or(Error::Overflow)?;
         buffer
-            .try_reserve(len - buffer.len())
+            .try_reserve(additional)
             .map_err(|_| Error::Allocation)?;
     }
     buffer.resize(len, 0);

@@ -74,12 +74,19 @@ impl EncryptionCodec for Aes256Gcm {
             .len()
             .checked_sub(crate::TAG_LEN)
             .ok_or(crate::Error::InvalidStoredLength)?;
-        let tag: [u8; crate::TAG_LEN] = buffer[payload_len..].try_into().unwrap();
+        let tag: [u8; crate::TAG_LEN] = buffer
+            .get(payload_len..)
+            .ok_or(crate::Error::InvalidStoredLength)?
+            .try_into()
+            .map_err(|_| crate::Error::InvalidStoredLength)?;
+        let payload = buffer
+            .get_mut(..payload_len)
+            .ok_or(crate::Error::InvalidStoredLength)?;
         self.0
             .decrypt_inout_detached(
                 &nonce(index),
                 b"",
-                (&mut buffer[..payload_len]).into(),
+                payload.into(),
                 &tag.into(),
             )
             .map_err(|_| crate::Error::AuthenticationFailed)?;

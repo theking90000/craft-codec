@@ -79,10 +79,14 @@ impl FrameWriter<Vec<u8>> for Writer {
         }
         // Simulate partial transport writes. A real backend registers this waker
         // and wakes on readiness; only this in-memory demonstration self-wakes.
-        let end = (this.written + 7).min(this.buffer.len());
+        let end = this.written.saturating_add(7).min(this.buffer.len());
+        let bytes = this
+            .buffer
+            .get(this.written..end)
+            .ok_or(Error::InvalidStoredLength)?;
         this.object
             .bytes
-            .extend_from_slice(&this.buffer[this.written..end]);
+            .extend_from_slice(bytes);
         this.written = end;
         if end != this.buffer.len() {
             cx.waker().wake_by_ref();
@@ -93,7 +97,8 @@ impl FrameWriter<Vec<u8>> for Writer {
             this.object.metadata.frame_count(),
             this.buffer.len()
         );
-        this.object.metadata.push(this.pending.take().unwrap())?;
+        let sizes = this.pending.take().ok_or(Error::InvalidMetadata)?;
+        this.object.metadata.push(sizes)?;
         Poll::Ready(Ok(()))
     }
 
@@ -111,6 +116,23 @@ struct View<'a> {
     object: &'a Object,
     key: &'a [u8; 32],
     selection: Range<u64>,
+    frame_count: u32,
+}
+
+impl<'a> View<'a> {
+    fn new(object: &'a Object, key: &'a [u8; 32], selection: Range<u64>) -> Result<Self> {
+        let frame_count = object
+            .metadata
+            .range(selection.start, Some(selection.end))?
+            .1
+            .remaining();
+        Ok(Self {
+            object,
+            key,
+            selection,
+            frame_count: u32::try_from(frame_count).map_err(|_| Error::Overflow)?,
+        })
+    }
 }
 
 struct SelectedFrame {
@@ -123,17 +145,7 @@ impl<'a> ReadFile<SelectedFrame> for View<'a> {
     type Reader = Reader<'a>;
     type Open = Ready<Result<Self::Reader>>;
     fn frame_count(&self) -> u32 {
-        // The example constructs a known nonempty, valid range. A general adapter
-        // validates and stores this count in its constructor, before scheduling.
-        u32::try_from(
-            self.object
-                .metadata
-                .range(self.selection.start, Some(self.selection.end))
-                .unwrap()
-                .1
-                .remaining(),
-        )
-        .unwrap()
+        self.frame_count
     }
     fn open(&self) -> Self::Open {
         ready((|| {
@@ -141,8 +153,14 @@ impl<'a> ReadFile<SelectedFrame> for View<'a> {
                 .object
                 .metadata
                 .range(self.selection.start, Some(self.selection.end))?;
+            let start = usize::try_from(query.start).map_err(|_| Error::Overflow)?;
+            let end = usize::try_from(query.end).map_err(|_| Error::Overflow)?;
             Ok(Reader {
-                source: &self.object.bytes[query.start as usize..query.end as usize],
+                source: self
+                    .object
+                    .bytes
+                    .get(start..end)
+                    .ok_or(Error::InvalidStoredLength)?,
                 frames,
                 decoder: Decoder::new(
                     self.object.metadata.config(),
@@ -178,8 +196,12 @@ impl Stream for Reader<'_> {
             return Poll::Ready(Some(Err(Error::InvalidStoredLength)));
         }
         // Owned Stream items need their own storage. CRAFT imposes no pool policy.
-        let mut buffer = this.source[..len].to_vec();
-        this.source = &this.source[len..];
+        let Some((encoded, remaining)) = this.source.split_at_checked(len) else {
+            this.stopped = true;
+            return Poll::Ready(Some(Err(Error::InvalidStoredLength)));
+        };
+        let mut buffer = encoded.to_vec();
+        this.source = remaining;
         if let Err(error) = this.decoder.decode_frame(frame.spec, &mut buffer) {
             this.stopped = true;
             return Poll::Ready(Some(Err(error)));
@@ -206,19 +228,17 @@ fn main() -> Result<()> {
         let object = writes
             .next()
             .await
-            .unwrap()
+            .ok_or(Error::InvalidMetadata)?
             .map_err(|_| Error::InvalidMetadata)?;
         println!(
             "Objet metadata: {:?} | >bytes {}",
             object.metadata,
             object.bytes.len()
         );
-        assert!(writes.next().await.is_none());
-        let view = View {
-            object: &object,
-            key: &key,
-            selection: 500..713,
-        };
+        if writes.next().await.is_some() {
+            return Err(Error::InvalidMetadata);
+        }
+        let view = View::new(&object, &key, 500..713)?;
         let mut reads = ReadScheduler::new(
             stream::iter([view]),
             FrameBudget::new(8),
@@ -233,9 +253,16 @@ fn main() -> Result<()> {
                 frame.selected.start,
                 frame.selected.end
             );
-            actual.extend_from_slice(&frame.buffer[frame.selected]);
+            actual.extend_from_slice(
+                frame
+                    .buffer
+                    .get(frame.selected)
+                    .ok_or(Error::InvalidRange)?,
+            );
         }
-        assert_eq!(actual, raw[500..713]);
+        if raw.get(500..713) != Some(actual.as_slice()) {
+            return Err(Error::InvalidMetadata);
+        }
         println!(
             "{} selected bytes from {} stored frames",
             actual.len(),

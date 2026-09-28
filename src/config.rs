@@ -140,7 +140,9 @@ impl Config {
     pub fn max_frames(self) -> u64 {
         match self.encryption {
             Encryption::None => u64::MAX,
-            Encryption::Aes256Gcm => AES_MAX_FRAMES.min(AES_MAX_BYTES / self.max_frame_len()),
+            Encryption::Aes256Gcm => AES_MAX_BYTES
+                .checked_div(self.max_frame_len())
+                .map_or(0, |frames| AES_MAX_FRAMES.min(frames)),
         }
     }
 

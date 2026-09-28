@@ -46,7 +46,7 @@ impl FrameSpec {
     }
     /// Complete stored length, including the tag.
     pub fn stored_len(self) -> usize {
-        self.sizes.payload as usize + self.config.encryption().tag_len()
+        (self.sizes.payload as usize).saturating_add(self.config.encryption().tag_len())
     }
     /// Payload size excluding the tag.
     pub fn payload_len(self) -> usize {
@@ -115,7 +115,7 @@ impl<'de> serde::Deserialize<'de> for Metadata {
 impl Metadata {
     /// Start an empty object. This allocates no index entries.
     pub fn new(config: Config) -> Self {
-        let table = || Lengths::new(config.max_frame_len()).expect("validated maximum");
+        let table = || Lengths::for_config(config);
         Self {
             parts: MetadataParts {
                 version: FORMAT_VERSION,
@@ -174,9 +174,15 @@ impl Metadata {
                 let logical = if count == 0 {
                     0
                 } else {
-                    (count - 1)
+                    let last = result
+                        .parts
+                        .last_frame_len
+                        .ok_or(Error::InvalidMetadata)?;
+                    count
+                        .checked_sub(1)
+                        .ok_or(Error::InvalidMetadata)?
                         .checked_mul(size)
-                        .and_then(|n| n.checked_add(result.parts.last_frame_len.unwrap()))
+                        .and_then(|n| n.checked_add(last))
                         .ok_or(Error::Overflow)?
                 };
                 result.logical_len = logical;
@@ -188,19 +194,23 @@ impl Metadata {
             }
         }
         for i in 0..count {
+            let table_index = usize::try_from(i).map_err(|_| Error::InvalidMetadata)?;
             let raw = match config.framing() {
-                Framing::Fixed(size) if i + 1 < count => size,
-                Framing::Fixed(_) => result.parts.last_frame_len.unwrap(),
+                Framing::Fixed(size) if i.checked_add(1).is_some_and(|next| next < count) => size,
+                Framing::Fixed(_) => result
+                    .parts
+                    .last_frame_len
+                    .ok_or(Error::InvalidMetadata)?,
                 Framing::Variable(_) => result
                     .parts
                     .raw_lengths
                     .as_ref()
-                    .unwrap()
-                    .get(i as usize)
+                    .ok_or(Error::InvalidMetadata)?
+                    .get(table_index)
                     .ok_or(Error::InvalidMetadata)?,
             };
             let payload = match &result.parts.payload_lengths {
-                Some(table) => table.get(i as usize).ok_or(Error::InvalidMetadata)?,
+                Some(table) => table.get(table_index).ok_or(Error::InvalidMetadata)?,
                 None => raw,
             };
             config.validate_frame(i, raw, payload)?;
@@ -240,7 +250,10 @@ impl Metadata {
     }
     /// Last raw frame length; absent for an empty object.
     pub fn last_frame_len(&self) -> Option<u64> {
-        self.frame_count().checked_sub(1).map(|i| self.sizes(i).raw)
+        self.frame_count()
+            .checked_sub(1)
+            .and_then(|index| self.sizes(index))
+            .map(|sizes| sizes.raw)
     }
 
     /// Append one successfully stored frame. Failures leave metadata unchanged.
@@ -287,31 +300,35 @@ impl Metadata {
 
     /// Look up a codec descriptor by its original frame index in O(1).
     pub fn frame(&self, index: u64) -> Option<FrameSpec> {
-        (index < self.frame_count()).then(|| FrameSpec {
+        if index >= self.frame_count() {
+            return None;
+        }
+        Some(FrameSpec {
             config: self.config(),
             index,
-            sizes: self.sizes(index),
+            sizes: self.sizes(index)?,
         })
     }
 
-    fn sizes(&self, index: u64) -> FrameSizes {
+    fn sizes(&self, index: u64) -> Option<FrameSizes> {
+        let table_index = usize::try_from(index).ok()?;
         let raw = match self.config().framing() {
-            Framing::Fixed(size) if index + 1 < self.frame_count() => size,
-            Framing::Fixed(_) => self.parts.last_frame_len.unwrap(),
+            Framing::Fixed(size)
+                if index
+                    .checked_add(1)
+                    .is_some_and(|next| next < self.frame_count()) => size,
+            Framing::Fixed(_) => self.parts.last_frame_len?,
             Framing::Variable(_) => self
                 .parts
                 .raw_lengths
                 .as_ref()
-                .unwrap()
-                .get(index as usize)
-                .unwrap(),
+                .and_then(|table| table.get(table_index))?,
         };
-        let payload = self
-            .parts
-            .payload_lengths
-            .as_ref()
-            .map_or(raw, |v| v.get(index as usize).unwrap());
-        FrameSizes { raw, payload }
+        let payload = match &self.parts.payload_lengths {
+            Some(table) => table.get(table_index)?,
+            None => raw,
+        };
+        Some(FrameSizes { raw, payload })
     }
 
     /// Map logical `[start, end)` bytes to a physical range of complete frames.
@@ -334,43 +351,70 @@ impl Metadata {
             return Ok((0..0, iter(0, 0, 0)));
         }
         if let Framing::Fixed(size) = self.config().framing() {
-            let first = start / size;
-            let stop = (end - 1) / size + 1;
+            let first = start.checked_div(size).ok_or(Error::InvalidMetadata)?;
+            let last = end.checked_sub(1).ok_or(Error::InvalidRange)?;
+            let last_frame = last.checked_div(size).ok_or(Error::InvalidMetadata)?;
+            let stop = last_frame.checked_add(1).ok_or(Error::Overflow)?;
             if self.config().compression() == Compression::None {
-                let stride = size + self.config().encryption().tag_len() as u64;
-                let physical_start = first * stride;
+                let stride = size
+                    .checked_add(self.config().encryption().tag_len() as u64)
+                    .ok_or(Error::Overflow)?;
+                let physical_start = first.checked_mul(stride).ok_or(Error::Overflow)?;
                 let physical_end = if stop == self.frame_count() {
                     self.stored_len
                 } else {
-                    stop * stride
+                    stop.checked_mul(stride).ok_or(Error::Overflow)?
                 };
+                let logical_start = first.checked_mul(size).ok_or(Error::Overflow)?;
                 return Ok((
                     physical_start..physical_end,
-                    iter(first, stop, first * size),
+                    iter(first, stop, logical_start),
                 ));
             }
             let mut physical = 0;
             for i in 0..first {
-                physical += self.sizes(i).payload + self.config().encryption().tag_len() as u64;
+                let sizes = self.sizes(i).ok_or(Error::InvalidMetadata)?;
+                physical = physical
+                    .checked_add(sizes.payload)
+                    .and_then(|value| {
+                        value.checked_add(self.config().encryption().tag_len() as u64)
+                    })
+                    .ok_or(Error::Overflow)?;
             }
             let physical_start = physical;
             if stop == self.frame_count() {
                 physical = self.stored_len;
             } else {
                 for i in first..stop {
-                    physical += self.sizes(i).payload + self.config().encryption().tag_len() as u64;
+                    let sizes = self.sizes(i).ok_or(Error::InvalidMetadata)?;
+                    physical = physical
+                        .checked_add(sizes.payload)
+                        .and_then(|value| {
+                            value.checked_add(self.config().encryption().tag_len() as u64)
+                        })
+                        .ok_or(Error::Overflow)?;
                 }
             }
-            return Ok((physical_start..physical, iter(first, stop, first * size)));
+            let logical_start = first.checked_mul(size).ok_or(Error::Overflow)?;
+            return Ok((physical_start..physical, iter(first, stop, logical_start)));
         }
         let mut logical = 0;
         let mut physical = 0;
         let mut first = 0;
-        while logical + self.sizes(first).raw <= start {
-            let sizes = self.sizes(first);
-            logical += sizes.raw;
-            physical += sizes.payload + self.config().encryption().tag_len() as u64;
-            first += 1;
+        loop {
+            let sizes = self.sizes(first).ok_or(Error::InvalidMetadata)?;
+            let next_logical = logical.checked_add(sizes.raw).ok_or(Error::Overflow)?;
+            if next_logical > start {
+                break;
+            }
+            logical = next_logical;
+            physical = physical
+                .checked_add(sizes.payload)
+                .and_then(|value| {
+                    value.checked_add(self.config().encryption().tag_len() as u64)
+                })
+                .ok_or(Error::Overflow)?;
+            first = first.checked_add(1).ok_or(Error::Overflow)?;
         }
         let logical_start = logical;
         let physical_start = physical;
@@ -380,10 +424,15 @@ impl Metadata {
             physical = self.stored_len;
         } else {
             while logical < end {
-                let sizes = self.sizes(stop);
-                logical += sizes.raw;
-                physical += sizes.payload + self.config().encryption().tag_len() as u64;
-                stop += 1;
+                let sizes = self.sizes(stop).ok_or(Error::InvalidMetadata)?;
+                logical = logical.checked_add(sizes.raw).ok_or(Error::Overflow)?;
+                physical = physical
+                    .checked_add(sizes.payload)
+                    .and_then(|value| {
+                        value.checked_add(self.config().encryption().tag_len() as u64)
+                    })
+                    .ok_or(Error::Overflow)?;
+                stop = stop.checked_add(1).ok_or(Error::Overflow)?;
             }
         }
         Ok((physical_start..physical, iter(first, stop, logical_start)))
@@ -403,7 +452,7 @@ pub struct FrameIter<'a> {
 impl FrameIter<'_> {
     /// Exact remaining frame count, including partial boundary frames.
     pub fn remaining(&self) -> u64 {
-        self.stop - self.next
+        self.stop.saturating_sub(self.next)
     }
 }
 
@@ -414,12 +463,13 @@ impl Iterator for FrameIter<'_> {
         if self.next == self.stop {
             return None;
         }
-        let spec = self.metadata.frame(self.next).unwrap();
-        let logical_end = self.logical + spec.sizes.raw;
+        let spec = self.metadata.frame(self.next)?;
+        let logical_end = self.logical.checked_add(spec.sizes.raw)?;
+        let selected_end = self.selection.end.min(logical_end).checked_sub(self.logical)?;
         let selected = (self.selection.start.saturating_sub(self.logical) as usize)
-            ..((self.selection.end.min(logical_end) - self.logical) as usize);
+            ..(selected_end as usize);
         self.logical = logical_end;
-        self.next += 1;
+        self.next = self.next.checked_add(1)?;
         Some(FrameRead { spec, selected })
     }
 
