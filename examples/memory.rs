@@ -20,9 +20,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let (query, frames) = metadata.range(3, Some(19))?;
     let start = usize::try_from(query.start).map_err(|_| Error::Overflow)?;
     let end = usize::try_from(query.end).map_err(|_| Error::Overflow)?;
-    let mut source = object
-        .get(start..end)
-        .ok_or(Error::InvalidStoredLength)?;
+    let mut source = object.get(start..end).ok_or(Error::InvalidStoredLength)?;
     let mut selected = Vec::new();
     for frame in frames {
         buffer.resize(frame.spec.stored_len(), 0);

@@ -174,10 +174,7 @@ impl Metadata {
                 let logical = if count == 0 {
                     0
                 } else {
-                    let last = result
-                        .parts
-                        .last_frame_len
-                        .ok_or(Error::InvalidMetadata)?;
+                    let last = result.parts.last_frame_len.ok_or(Error::InvalidMetadata)?;
                     count
                         .checked_sub(1)
                         .ok_or(Error::InvalidMetadata)?
@@ -197,10 +194,7 @@ impl Metadata {
             let table_index = usize::try_from(i).map_err(|_| Error::InvalidMetadata)?;
             let raw = match config.framing() {
                 Framing::Fixed(size) if i.checked_add(1).is_some_and(|next| next < count) => size,
-                Framing::Fixed(_) => result
-                    .parts
-                    .last_frame_len
-                    .ok_or(Error::InvalidMetadata)?,
+                Framing::Fixed(_) => result.parts.last_frame_len.ok_or(Error::InvalidMetadata)?,
                 Framing::Variable(_) => result
                     .parts
                     .raw_lengths
@@ -316,7 +310,10 @@ impl Metadata {
             Framing::Fixed(size)
                 if index
                     .checked_add(1)
-                    .is_some_and(|next| next < self.frame_count()) => size,
+                    .is_some_and(|next| next < self.frame_count()) =>
+            {
+                size
+            }
             Framing::Fixed(_) => self.parts.last_frame_len?,
             Framing::Variable(_) => self
                 .parts
@@ -410,9 +407,7 @@ impl Metadata {
             logical = next_logical;
             physical = physical
                 .checked_add(sizes.payload)
-                .and_then(|value| {
-                    value.checked_add(self.config().encryption().tag_len() as u64)
-                })
+                .and_then(|value| value.checked_add(self.config().encryption().tag_len() as u64))
                 .ok_or(Error::Overflow)?;
             first = first.checked_add(1).ok_or(Error::Overflow)?;
         }
@@ -465,9 +460,13 @@ impl Iterator for FrameIter<'_> {
         }
         let spec = self.metadata.frame(self.next)?;
         let logical_end = self.logical.checked_add(spec.sizes.raw)?;
-        let selected_end = self.selection.end.min(logical_end).checked_sub(self.logical)?;
-        let selected = (self.selection.start.saturating_sub(self.logical) as usize)
-            ..(selected_end as usize);
+        let selected_end = self
+            .selection
+            .end
+            .min(logical_end)
+            .checked_sub(self.logical)?;
+        let selected =
+            (self.selection.start.saturating_sub(self.logical) as usize)..(selected_end as usize);
         self.logical = logical_end;
         self.next = self.next.checked_add(1)?;
         Some(FrameRead { spec, selected })

@@ -83,12 +83,7 @@ impl EncryptionCodec for Aes256Gcm {
             .get_mut(..payload_len)
             .ok_or(crate::Error::InvalidStoredLength)?;
         self.0
-            .decrypt_inout_detached(
-                &nonce(index),
-                b"",
-                payload.into(),
-                &tag.into(),
-            )
+            .decrypt_inout_detached(&nonce(index), b"", payload.into(), &tag.into())
             .map_err(|_| crate::Error::AuthenticationFailed)?;
         buffer.truncate(payload_len);
         Ok(())
