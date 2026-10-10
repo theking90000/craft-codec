@@ -1,5 +1,9 @@
 # Changelog
 
+## 0.2.2 - 2026-10-10
+
+- Change `Encoder::encode_frame_alloc` to return `(Vec<u8>, FrameSizes)`, preserving the lengths needed to append metadata.
+
 ## 0.2.1 - 2026-10-10
 
 - Add `Encoder::encode_frame_alloc` to encode immutable input into an owned buffer.
