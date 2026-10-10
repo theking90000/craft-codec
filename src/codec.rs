@@ -49,9 +49,14 @@ impl Encoder {
     }
 
     /// Encode raw bytes into an owned buffer, leaving the input unchanged.
+    /// Return the stored bytes and lengths to append to metadata.
     /// Empty/oversized frames and out-of-policy indices are refused.
     /// Allocation and encoding failures are returned as errors.
-    pub fn encode_frame_alloc(&mut self, index: u64, buffer: &[u8]) -> Result<Vec<u8>> {
+    pub fn encode_frame_alloc(
+        &mut self,
+        index: u64,
+        buffer: &[u8],
+    ) -> Result<(Vec<u8>, FrameSizes)> {
         let capacity = buffer
             .len()
             .checked_add(self.encryption.overhead())
@@ -61,8 +66,8 @@ impl Encoder {
             .try_reserve(capacity)
             .map_err(|_| Error::Allocation)?;
         encoded.extend_from_slice(buffer);
-        self.encode_frame(index, &mut encoded)?;
-        Ok(encoded)
+        let sizes = self.encode_frame(index, &mut encoded)?;
+        Ok((encoded, sizes))
     }
 
     fn encode_inner(&mut self, index: u64, buffer: &mut Vec<u8>) -> Result<FrameSizes> {
