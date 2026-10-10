@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.2.1 - 2026-10-10
+
+- Add `Encoder::encode_frame_alloc` to encode immutable input into an owned buffer.
+- Reserve encryption overhead when allocating the frame buffer.
+
 ## 0.2.0 - 2026-10-10
 
 - Breaking: construct non-generic `Encoder` and `Decoder` through `TryInto` from self-contained metadata.

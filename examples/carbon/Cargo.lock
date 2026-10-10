@@ -101,7 +101,7 @@ dependencies = [
 
 [[package]]
 name = "craft-codec"
-version = "0.2.0"
+version = "0.2.1"
 dependencies = [
  "aes-gcm",
  "lz4_flex",
