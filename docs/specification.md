@@ -1,7 +1,8 @@
 # Première spécification de CRAFT I/O
 
 Spécification du 20 septembre 2026, révisée après discussion des offsets, des
-nonces et du choix d'une API unique, puis implémentée en version 0.1.0.
+nonces et du choix d'une API unique, puis implémentée en version 0.1.0. La version 0.2.0 rend les métadonnées
+autonomes et versionne leur schéma sérialisé.
 L'API utilise `Vec<u8>`, AES-GCM par défaut et LZ4 en feature optionnelle.
 Les exemples du README sont exécutables ; les extraits de conception de ce
 document restent indicatifs. Le protocole de mesure est dans `benchmarks.md`.
@@ -42,7 +43,7 @@ L'appelant fournit et conserve :
 
 - les trames brutes à écrire ;
 - l'accès aux octets stockés, notamment `open(offset, limit)` ;
-- une clé secrète si le chiffrement est activé ;
+- une clé secrète dans les métadonnées initiales si le chiffrement est activé ;
 - le stockage fiable des métadonnées et leur association au bon objet ;
 - la publication atomique de l'objet et de ses métadonnées après succès.
 
@@ -141,8 +142,9 @@ devront mesurer aussi le coût des tentatives infructueuses de compression.
 
 ## 5. Métadonnées et index
 
-Le descripteur externe contient la version du format, le découpage, les codecs,
-le nombre de trames, la limite de taille brute et les données suivantes :
+Le descripteur externe contient la version du schéma, la version du format des
+trames, le découpage, les codecs et leurs paramètres complets, le nombre de
+trames, la limite de taille brute et les données suivantes :
 
 - découpage fixe : taille `F` et taille de la dernière trame ;
 - découpage variable : tableau des tailles logiques, dernière trame incluse ;
@@ -154,7 +156,19 @@ dupliquer. Pour un objet vide, elle est absente.
 
 Les longueurs totales sont calculables. Si le stockage externe les conserve
 aussi, CRAFT vérifie leur cohérence à la préparation du descripteur.
-La clé est un argument secret séparé, pas un champ sérialisable du descripteur.
+La variante `Encryption::Aes256Gcm { key }` contient la clé sérialisable de
+l'objet. Les métadonnées doivent donc être conservées dans un stockage fiable
+et confidentiel. La désérialisation restitue la configuration complète, sans
+clé ni donnée d'initialisation à fournir séparément.
+
+`schema_version` est obligatoire et vaut `METADATA_SCHEMA_VERSION`, actuellement
+`2`. Seul ce schéma, introduit dans craft-codec 0.2.0, est accepté par la
+désérialisation et par `Metadata::from_parts`. Les métadonnées antérieures à
+0.2.0 et les versions inconnues sont explicitement refusées, sans compatibilité
+ni migration. `version` décrit séparément le format des trames et reste `1`.
+Les longueurs totales sont recalculées et les index vérifiés à la restauration.
+Les enums sérialisées existent indépendamment des features des codecs ; une
+conversion vers un codec indisponible retourne une erreur explicite.
 
 ### Largeurs automatiques
 
@@ -513,18 +527,25 @@ par le choix du buffer et l'adaptateur.
 
 ## 9. Composition et hot path
 
-L'API peut utiliser `Encoder<C, E>` et `Decoder<C, E>`, avec un composant de
-compression `C` et un composant de chiffrement `E`. Les variantes identité
-suppriment leurs traitements par static dispatch. Le découpage et l'index
-restent séparés du codec.
+`Encoder` et `Decoder` sont des types sans paramètres génériques, construits
+uniquement par `TryInto` depuis `Metadata` ou `&Metadata` :
 
-Deux petits contrats suffisent : compresser/décompresser vers un buffer,
-puis chiffrer/déchiffrer en place. `CompressionCodec` et `EncryptionCodec`
-sont des traits scellés, nommables par le code générique de l'appelant mais
-non implémentables depuis l'extérieur. Les codecs disponibles sont `Identity`,
-`Lz4` et `Aes256Gcm` selon les features.
-Pas de liste dynamique de stages ni d'empilement de wrappers qui possèdent
-chacun leurs buffers. L'ordre compression puis chiffrement fait partie du format.
+```rust,ignore
+let mut encoder: Encoder = (&metadata).try_into()?;
+let (query, frames) = metadata.range(3, Some(19))?;
+let mut decoder: Decoder = (&metadata).try_into()?;
+```
+
+La conversion initialise les instances actives à partir des paramètres stockés
+dans les métadonnées. Les instances possèdent leur configuration et leur état,
+sans emprunt conservé. La forme empruntée permet de garder l'itérateur de plage
+et de construire un codec sans consommer les métadonnées ni copier les index.
+
+Des enums privées sélectionnent les implémentations de compression et de
+chiffrement. Les buffers temporaires, la table LZ4 et la clé développée AES ne
+sont pas sérialisés. Seuls les paramètres nécessaires à leur reconstruction
+font partie de la configuration. Le découpage et l'index restent séparés du
+codec. L'ordre compression puis chiffrement fait partie du format.
 
 Objectifs à mesurer :
 
@@ -697,7 +718,8 @@ L'implémentation applique ces choix :
    le prêt et le recyclage des buffers de lecture sont des sujets séparés.
 7. AES-GCM puis LZ4. Type de buffer unique `Vec<u8>`.
 
-Le format porte la version 1. Les identifiants sont `0` pour l'identité,
-`1` pour LZ4 sur l'axe compression et `1` pour AES-256-GCM sur l'axe chiffrement.
+Le format des trames porte la version 1 ; le schéma des métadonnées porte la
+version 2. Les variantes `None`, `Lz4` et `Aes256Gcm { key }` décrivent les codecs
+et leurs données de reconstruction.
 L'AAD est vide. Un test à réponse connue fixe l'ordre ciphertext puis tag.
 Le README détaille le contrat d'utilisation des clés et les limites AES.

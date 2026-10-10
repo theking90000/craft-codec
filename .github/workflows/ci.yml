@@ -22,6 +22,8 @@ jobs:
       - run: cargo test --locked --all-features --release
       - run: cargo test --locked --no-default-features
       - run: cargo test --locked --no-default-features --features lz4
+      - run: cargo test --locked --no-default-features --features serde
+      - run: cargo test --locked --no-default-features --features lz4,serde
       - run: cargo run --locked --example memory --no-default-features
 
   quality:

@@ -1,5 +1,15 @@
 # Changelog
 
+## 0.2.0 - 2026-10-10
+
+- Breaking: construct non-generic `Encoder` and `Decoder` through `TryInto` from self-contained metadata.
+- Store all codec initialization parameters, including the AES-256-GCM key, in serializable metadata.
+- Remove separate codec instances, key arguments and public codec traits from the construction API.
+- Require metadata schema version 2. Metadata from releases before 0.2.0 is explicitly unsupported; missing and unknown schemas are rejected.
+- Keep frame format version 1 and the encoded frame layout unchanged.
+- Deserialize metadata independently of enabled codecs; report unavailable codecs at conversion.
+- Update examples, benchmarks and behavior tests; add binary persistence coverage with postcard.
+
 ## 0.1.2 - 2026-09-28
 
 - Replace panic-prone metadata and AES buffer handling with checked operations and structured errors.

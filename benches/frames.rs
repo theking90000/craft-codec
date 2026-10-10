@@ -1,6 +1,6 @@
 //! Reproducible standalone codec benchmark; no benchmark framework dependency.
 use craft_codec::{
-    CompressionCodec, Decoder, Encoder, EncryptionCodec, FrameSizes, Framing, Identity, Metadata,
+    Compression, Config, Decoder, Encoder, Encryption, FrameSizes, Framing, Metadata,
 };
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use std::{
@@ -44,25 +44,22 @@ fn report(
     );
 }
 
-fn bench<C: CompressionCodec, E: EncryptionCodec>(
+fn bench(
     profile: &str,
     corpus: &str,
     raw: &[u8],
-    compression: impl Fn() -> C,
-    encryption: impl Fn() -> E,
+    compression: Compression,
+    encryption: Encryption,
 ) {
-    let mut encoder = Encoder::new(
-        Framing::Fixed(raw.len() as u64),
-        compression(),
-        encryption(),
-    )
-    .unwrap();
-    let mut decoder = Decoder::new(encoder.config(), compression(), encryption()).unwrap();
+    let mut metadata = Metadata::new(
+        Config::new(Framing::Fixed(raw.len() as u64), compression, encryption).unwrap(),
+    );
+    let mut encoder = Encoder::try_from(&metadata).unwrap();
+    let mut decoder = Decoder::try_from(&metadata).unwrap();
     let mut buffer = raw.to_vec();
     let sizes = encoder.encode_frame(0, &mut buffer).unwrap();
     let encoded = buffer.clone();
     let stored = encoded.len();
-    let mut metadata = Metadata::new(encoder.config());
     metadata.push(sizes).unwrap();
     let spec = metadata.frame(0).unwrap();
     // Repeated encryption in this benchmark has identical key, nonce and payload.
@@ -90,7 +87,9 @@ fn bench<C: CompressionCodec, E: EncryptionCodec>(
     let mut decode = || {
         buffer.clear();
         buffer.extend_from_slice(&encoded);
-        decoder.decode_frame(spec, black_box(&mut buffer)).unwrap();
+        decoder
+            .decode_frame(spec.clone(), black_box(&mut buffer))
+            .unwrap();
         black_box(&buffer);
     };
     for _ in 0..8 {
@@ -184,21 +183,31 @@ fn main() {
                 [vec![b'A'; size / 2], noise[..size / 2].to_vec()].concat(),
             ),
         ] {
-            bench("identity", corpus, &raw, || Identity, || Identity);
+            bench(
+                "identity",
+                corpus,
+                &raw,
+                Compression::None,
+                Encryption::None,
+            );
             #[cfg(feature = "aes-gcm")]
             bench(
                 "aes",
                 corpus,
                 &raw,
-                || Identity,
-                || craft_codec::Aes256Gcm::new(&[1; 32]),
+                Compression::None,
+                Encryption::Aes256Gcm { key: [1; 32] },
             );
             #[cfg(feature = "lz4")]
-            bench("lz4", corpus, &raw, craft_codec::Lz4::new, || Identity);
+            bench("lz4", corpus, &raw, Compression::Lz4, Encryption::None);
             #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
-            bench("lz4_aes", corpus, &raw, craft_codec::Lz4::new, || {
-                craft_codec::Aes256Gcm::new(&[2; 32])
-            });
+            bench(
+                "lz4_aes",
+                corpus,
+                &raw,
+                Compression::Lz4,
+                Encryption::Aes256Gcm { key: [2; 32] },
+            );
             direct(corpus, &raw);
         }
     }

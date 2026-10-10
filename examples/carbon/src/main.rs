@@ -2,7 +2,10 @@
 use carbon_io::{
     FrameBudget, FrameWriter, ReadFile, ReadScheduler, SchedulerConfig, WriteFile, WriteScheduler,
 };
-use craft_codec::{Aes256Gcm, Decoder, Encoder, Error, FrameIter, FrameSizes, Framing, Lz4, Metadata};
+use craft_codec::{
+    Compression, Config, Decoder, Encoder, Encryption, Error, FrameIter, FrameSizes, Framing,
+    Metadata,
+};
 use futures::{Stream, StreamExt, executor::block_on, stream};
 use std::{
     future::{Ready, ready},
@@ -31,25 +34,28 @@ impl WriteFile<Vec<u8>> for Destination {
         4
     }
     fn open(&self) -> Self::Open {
-        ready(
-            Encoder::new(Framing::Fixed(256), Lz4::new(), Aes256Gcm::new(&self.key)).map(
-                |encoder| Writer {
-                    object: Object {
-                        bytes: Vec::new(),
-                        metadata: Metadata::new(encoder.config()),
-                    },
-                    encoder,
-                    buffer: Vec::new(),
-                    pending: None,
-                    written: 0,
+        ready((|| {
+            let metadata = Metadata::new(Config::new(
+                Framing::Fixed(256),
+                Compression::Lz4,
+                Encryption::Aes256Gcm { key: self.key },
+            )?);
+            Ok(Writer {
+                encoder: (&metadata).try_into()?,
+                object: Object {
+                    bytes: Vec::new(),
+                    metadata,
                 },
-            ),
-        )
+                buffer: Vec::new(),
+                pending: None,
+                written: 0,
+            })
+        })())
     }
 }
 
 struct Writer {
-    encoder: Encoder<Lz4, Aes256Gcm>,
+    encoder: Encoder,
     object: Object,
     buffer: Vec<u8>,
     pending: Option<FrameSizes>,
@@ -84,9 +90,7 @@ impl FrameWriter<Vec<u8>> for Writer {
             .buffer
             .get(this.written..end)
             .ok_or(Error::InvalidStoredLength)?;
-        this.object
-            .bytes
-            .extend_from_slice(bytes);
+        this.object.bytes.extend_from_slice(bytes);
         this.written = end;
         if end != this.buffer.len() {
             cx.waker().wake_by_ref();
@@ -106,7 +110,7 @@ impl FrameWriter<Vec<u8>> for Writer {
         let this = self.get_mut();
         let replacement = Object {
             bytes: Vec::new(),
-            metadata: Metadata::new(this.encoder.config()),
+            metadata: Metadata::new(this.object.metadata.config().clone()),
         };
         Poll::Ready(Ok(std::mem::replace(&mut this.object, replacement)))
     }
@@ -114,13 +118,12 @@ impl FrameWriter<Vec<u8>> for Writer {
 
 struct View<'a> {
     object: &'a Object,
-    key: &'a [u8; 32],
     selection: Range<u64>,
     frame_count: u32,
 }
 
 impl<'a> View<'a> {
-    fn new(object: &'a Object, key: &'a [u8; 32], selection: Range<u64>) -> Result<Self> {
+    fn new(object: &'a Object, selection: Range<u64>) -> Result<Self> {
         let frame_count = object
             .metadata
             .range(selection.start, Some(selection.end))?
@@ -128,7 +131,6 @@ impl<'a> View<'a> {
             .remaining();
         Ok(Self {
             object,
-            key,
             selection,
             frame_count: u32::try_from(frame_count).map_err(|_| Error::Overflow)?,
         })
@@ -162,11 +164,7 @@ impl<'a> ReadFile<SelectedFrame> for View<'a> {
                     .get(start..end)
                     .ok_or(Error::InvalidStoredLength)?,
                 frames,
-                decoder: Decoder::new(
-                    self.object.metadata.config(),
-                    Lz4::new(),
-                    Aes256Gcm::new(self.key),
-                )?,
+                decoder: Decoder::try_from(&self.object.metadata)?,
                 stopped: false,
             })
         })())
@@ -176,7 +174,7 @@ impl<'a> ReadFile<SelectedFrame> for View<'a> {
 struct Reader<'a> {
     source: &'a [u8],
     frames: FrameIter<'a>,
-    decoder: Decoder<Lz4, Aes256Gcm>,
+    decoder: Decoder,
     stopped: bool,
 }
 
@@ -238,7 +236,7 @@ fn main() -> Result<()> {
         if writes.next().await.is_some() {
             return Err(Error::InvalidMetadata);
         }
-        let view = View::new(&object, &key, 500..713)?;
+        let view = View::new(&object, 500..713)?;
         let mut reads = ReadScheduler::new(
             stream::iter([view]),
             FrameBudget::new(8),
@@ -300,12 +298,7 @@ mod tests {
             writer.object.bytes.len() as u64,
             writer.object.metadata.stored_len()
         );
-        let mut decoder = Decoder::new(
-            writer.object.metadata.config(),
-            Lz4::new(),
-            Aes256Gcm::new(&key),
-        )
-        .unwrap();
+        let mut decoder = Decoder::try_from(&writer.object.metadata).unwrap();
         let mut encoded = writer.object.bytes;
         decoder
             .decode_frame(writer.object.metadata.frame(0).unwrap(), &mut encoded)

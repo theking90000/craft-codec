@@ -1,7 +1,7 @@
 //! Independent range model, persistence validation and integer boundaries.
 use craft_codec::{
-    Compression, Config, Encryption, Error, FORMAT_VERSION, FrameSizes, Framing, Lengths, Metadata,
-    MetadataParts,
+    Compression, Config, Encryption, Error, FORMAT_VERSION, FrameSizes, Framing, Lengths,
+    METADATA_SCHEMA_VERSION, Metadata, MetadataParts,
 };
 
 fn config(framing: Framing, compression: Compression, encryption: Encryption) -> Config {
@@ -37,7 +37,7 @@ fn index_widths_and_length_minus_one_boundaries() {
 fn every_logical_range_matches_an_independent_boundary_model() {
     for framing in [Framing::Fixed(7), Framing::Variable(7)] {
         for compression in [Compression::None, Compression::Lz4] {
-            for encryption in [Encryption::None, Encryption::Aes256Gcm] {
+            for encryption in [Encryption::None, Encryption::Aes256Gcm { key: [0; 32] }] {
                 let raw = match framing {
                     Framing::Fixed(_) => vec![7, 7, 7, 3],
                     _ => vec![3, 7, 1, 4],
@@ -52,7 +52,7 @@ fn every_logical_range_matches_an_independent_boundary_model() {
                         }
                     })
                     .collect();
-                let mut metadata = Metadata::new(config(framing, compression, encryption));
+                let mut metadata = Metadata::new(config(framing, compression, encryption.clone()));
                 for (&raw, &payload) in raw.iter().zip(&payload) {
                     metadata
                         .push(FrameSizes::new(raw, payload).unwrap())
@@ -122,7 +122,7 @@ fn documented_64k_example_includes_tag_and_preserves_slice() {
     let mut metadata = Metadata::new(config(
         Framing::Fixed(65_536),
         Compression::None,
-        Encryption::Aes256Gcm,
+        Encryption::Aes256Gcm { key: [0; 32] },
     ));
     metadata
         .push(FrameSizes::new(65_536, 65_536).unwrap())
@@ -185,6 +185,7 @@ fn malformed_persistence_is_rejected() {
 fn fixed_metadata_checks_overflow_without_allocating_frames() {
     let cfg = config(Framing::Fixed(8), Compression::None, Encryption::None);
     let mut parts = MetadataParts {
+        schema_version: METADATA_SCHEMA_VERSION,
         version: FORMAT_VERSION,
         config: cfg,
         frame_count: u64::MAX,
@@ -208,6 +209,7 @@ fn fixed_metadata_checks_overflow_without_allocating_frames() {
 fn large_fixed_ranges_need_no_frame_vector() {
     let cfg = config(Framing::Fixed(1), Compression::None, Encryption::None);
     let metadata = Metadata::from_parts(MetadataParts {
+        schema_version: METADATA_SCHEMA_VERSION,
         version: FORMAT_VERSION,
         config: cfg,
         frame_count: u64::MAX,

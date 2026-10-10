@@ -1,6 +1,8 @@
 use std::{iter::FusedIterator, ops::Range};
 
-use crate::{Compression, Config, Error, FORMAT_VERSION, Framing, Lengths, Result};
+use crate::{
+    Compression, Config, Error, FORMAT_VERSION, Framing, Lengths, METADATA_SCHEMA_VERSION, Result,
+};
 
 /// Lengths returned by an encoder, before the authentication tag.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -28,7 +30,7 @@ impl FrameSizes {
 }
 
 /// Codec input derived from validated metadata, independent of logical slicing.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct FrameSpec {
     pub(crate) config: Config,
     pub(crate) index: u64,
@@ -37,19 +39,19 @@ pub struct FrameSpec {
 
 impl FrameSpec {
     /// Frame index in the original object, also used to derive its nonce.
-    pub const fn index(self) -> u64 {
+    pub const fn index(&self) -> u64 {
         self.index
     }
     /// Complete raw buffer length.
-    pub fn raw_len(self) -> usize {
+    pub fn raw_len(&self) -> usize {
         self.sizes.raw as usize
     }
     /// Complete stored length, including the tag.
-    pub fn stored_len(self) -> usize {
+    pub fn stored_len(&self) -> usize {
         (self.sizes.payload as usize).saturating_add(self.config.encryption().tag_len())
     }
     /// Payload size excluding the tag.
-    pub fn payload_len(self) -> usize {
+    pub fn payload_len(&self) -> usize {
         self.sizes.payload as usize
     }
 }
@@ -63,12 +65,18 @@ pub struct FrameRead {
     pub selected: Range<usize>,
 }
 
-/// External metadata representation. It contains no key and is not self-authenticating.
+/// Self-contained external metadata, including keys. It is not self-authenticating.
 /// Persist it in trusted storage and restore with [`Metadata::from_parts`].
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
 pub struct MetadataParts {
-    /// Format identifier; currently [`FORMAT_VERSION`].
+    /// Required schema identifier. Only [`METADATA_SCHEMA_VERSION`] is supported.
+    #[cfg_attr(
+        feature = "serde",
+        serde(deserialize_with = "deserialize_schema_version")
+    )]
+    pub schema_version: u16,
+    /// Frame format identifier; currently [`FORMAT_VERSION`].
     pub version: u8,
     /// Object profile.
     pub config: Config,
@@ -80,6 +88,18 @@ pub struct MetadataParts {
     pub raw_lengths: Option<Lengths>,
     /// Required only with compression; excludes tags, includes raw fallbacks.
     pub payload_lengths: Option<Lengths>,
+}
+
+#[cfg(feature = "serde")]
+fn deserialize_schema_version<'de, D>(deserializer: D) -> std::result::Result<u16, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    let version = <u16 as serde::Deserialize>::deserialize(deserializer)?;
+    if version != METADATA_SCHEMA_VERSION {
+        return Err(serde::de::Error::custom(Error::UnsupportedSchemaVersion));
+    }
+    Ok(version)
 }
 
 /// Validated compact frame metadata, with cached scalar totals only.
@@ -115,15 +135,18 @@ impl<'de> serde::Deserialize<'de> for Metadata {
 impl Metadata {
     /// Start an empty object. This allocates no index entries.
     pub fn new(config: Config) -> Self {
-        let table = || Lengths::for_config(config);
+        let table = || Lengths::for_config(&config);
+        let raw_lengths = matches!(config.framing(), Framing::Variable(_)).then(table);
+        let payload_lengths = (config.compression() != Compression::None).then(table);
         Self {
             parts: MetadataParts {
+                schema_version: METADATA_SCHEMA_VERSION,
                 version: FORMAT_VERSION,
                 config,
                 frame_count: 0,
                 last_frame_len: None,
-                raw_lengths: matches!(config.framing(), Framing::Variable(_)).then(table),
-                payload_lengths: (config.compression() != Compression::None).then(table),
+                raw_lengths,
+                payload_lengths,
             },
             logical_len: 0,
             stored_len: 0,
@@ -133,10 +156,13 @@ impl Metadata {
     /// Restore and validate trusted external metadata without copying its arrays.
     /// Fixed uncompressed metadata is checked in O(1); indexed modes in O(N).
     pub fn from_parts(parts: MetadataParts) -> Result<Self> {
+        if parts.schema_version != METADATA_SCHEMA_VERSION {
+            return Err(Error::UnsupportedSchemaVersion);
+        }
         if parts.version != FORMAT_VERSION {
             return Err(Error::UnsupportedVersion);
         }
-        let config = parts.config;
+        let config = parts.config.clone();
         let count = parts.frame_count;
         if count > config.max_frames() {
             return Err(Error::UsageLimit);
@@ -227,8 +253,8 @@ impl Metadata {
         self.parts
     }
     /// Object-wide configuration.
-    pub fn config(&self) -> Config {
-        self.parts.config
+    pub fn config(&self) -> &Config {
+        &self.parts.config
     }
     /// Exact number of frames.
     pub fn frame_count(&self) -> u64 {
@@ -253,7 +279,7 @@ impl Metadata {
     /// Append one successfully stored frame. Failures leave metadata unchanged.
     /// Once a short fixed frame is appended, no further frames may follow it.
     pub fn push(&mut self, sizes: FrameSizes) -> Result<()> {
-        let config = self.config();
+        let config = self.config().clone();
         config.validate_frame(self.frame_count(), sizes.raw, sizes.payload)?;
         if let Framing::Fixed(size) = config.framing() {
             if self.parts.last_frame_len.is_some_and(|last| last != size) {
@@ -298,7 +324,7 @@ impl Metadata {
             return None;
         }
         Some(FrameSpec {
-            config: self.config(),
+            config: self.config().clone(),
             index,
             sizes: self.sizes(index)?,
         })

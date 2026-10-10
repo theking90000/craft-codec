@@ -15,7 +15,8 @@ cargo test --manifest-path examples/carbon/Cargo.toml
 It implements CARBON's existing `ReadFile`, `WriteFile` and borrowing
 `FrameWriter` traits outside CRAFT. Writes copy the immutable input once,
 encode once, and retain their state across simulated partial transport writes.
-Reads return owned buffers with a selected slice, without copying that slice.
+Reads construct their decoder from the object's metadata, including its key,
+and return owned buffers with a selected slice, without copying that slice.
 The example uses a fixed test key and an in-memory backend, not a production
 key source or HTTP client. Production keys must be independent per object.
 Replays under one key must reproduce exactly the same payload at each index.

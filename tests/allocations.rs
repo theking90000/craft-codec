@@ -1,23 +1,19 @@
 //! Measure allocations after warming both scratch buffers.
 //! Run without libtest: its runner can allocate concurrently with the test,
 //! and the global allocator counts allocations from every thread.
-use craft_codec::{
-    CompressionCodec, Decoder, Encoder, EncryptionCodec, Framing, Identity, Metadata,
-};
+use craft_codec::{Compression, Config, Decoder, Encoder, Encryption, Framing, Metadata};
 use stats_alloc::{INSTRUMENTED_SYSTEM, Region, StatsAlloc};
 use std::alloc::System;
 
 #[global_allocator]
 static GLOBAL: &StatsAlloc<System> = &INSTRUMENTED_SYSTEM;
 
-fn exercise<C: CompressionCodec, E: EncryptionCodec>(
-    compression: impl Fn() -> C,
-    encryption: impl Fn() -> E,
-) {
-    let mut encoder = Encoder::new(Framing::Fixed(65_536), compression(), encryption()).unwrap();
-    let mut decoder = Decoder::new(encoder.config(), compression(), encryption()).unwrap();
+fn exercise(compression: Compression, encryption: Encryption) {
+    let mut metadata =
+        Metadata::new(Config::new(Framing::Fixed(65_536), compression, encryption).unwrap());
+    let mut encoder = Encoder::try_from(&metadata).unwrap();
+    let mut decoder = Decoder::try_from(&metadata).unwrap();
     let mut buffer = vec![0; 65_536];
-    let mut metadata = Metadata::new(encoder.config());
     // Keep the same plaintext; encode once per original object index.
     for index in 0..4 {
         let sizes = encoder.encode_frame(index, &mut buffer).unwrap();
@@ -58,13 +54,11 @@ fn exercise<C: CompressionCodec, E: EncryptionCodec>(
 }
 
 fn main() {
-    exercise(|| Identity, || Identity);
+    exercise(Compression::None, Encryption::None);
     #[cfg(feature = "aes-gcm")]
-    exercise(|| Identity, || craft_codec::Aes256Gcm::new(&[12; 32]));
+    exercise(Compression::None, Encryption::Aes256Gcm { key: [12; 32] });
     #[cfg(feature = "lz4")]
-    exercise(craft_codec::Lz4::new, || Identity);
+    exercise(Compression::Lz4, Encryption::None);
     #[cfg(all(feature = "aes-gcm", feature = "lz4"))]
-    exercise(craft_codec::Lz4::new, || {
-        craft_codec::Aes256Gcm::new(&[13; 32])
-    });
+    exercise(Compression::Lz4, Encryption::Aes256Gcm { key: [13; 32] });
 }

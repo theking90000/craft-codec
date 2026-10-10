@@ -1,25 +1,38 @@
-use crate::{Compression, Identity, Result};
+use crate::{Compression, Error, Result};
 
-/// Sealed compression implementation used for static dispatch.
-/// Applications normally pass [`Identity`] or, with feature `lz4`, `Lz4`.
-pub trait CompressionCodec: crate::sealed::Sealed {
-    /// Metadata format implemented by this codec.
-    const FORMAT: Compression;
-    /// Compress one block, retaining the original if compression is not smaller.
-    #[doc(hidden)]
-    fn encode(&mut self, buffer: &mut Vec<u8>) -> Result<()>;
-    /// Decode a compressed block to exactly `raw_len` bytes.
-    #[doc(hidden)]
-    fn decode(&mut self, buffer: &mut Vec<u8>, raw_len: usize) -> Result<()>;
+// Keep codec state inline so conversion requires no extra allocation.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum CompressionState {
+    None,
+    #[cfg(feature = "lz4")]
+    Lz4(Lz4),
 }
 
-impl CompressionCodec for Identity {
-    const FORMAT: Compression = Compression::None;
-    fn encode(&mut self, _: &mut Vec<u8>) -> Result<()> {
-        Ok(())
+impl CompressionState {
+    pub(crate) fn new(parameters: Compression) -> Result<Self> {
+        match parameters {
+            Compression::None => Ok(Self::None),
+            #[cfg(feature = "lz4")]
+            Compression::Lz4 => Ok(Self::Lz4(Lz4::new())),
+            #[cfg(not(feature = "lz4"))]
+            Compression::Lz4 => Err(Error::CompressionUnavailable),
+        }
     }
-    fn decode(&mut self, _: &mut Vec<u8>, _: usize) -> Result<()> {
-        Err(crate::Error::DecompressionFailed)
+
+    pub(crate) fn encode(&mut self, _buffer: &mut Vec<u8>) -> Result<()> {
+        match self {
+            Self::None => Ok(()),
+            #[cfg(feature = "lz4")]
+            Self::Lz4(codec) => codec.encode(_buffer),
+        }
+    }
+
+    pub(crate) fn decode(&mut self, _buffer: &mut Vec<u8>, _raw_len: usize) -> Result<()> {
+        match self {
+            Self::None => Err(Error::DecompressionFailed),
+            #[cfg(feature = "lz4")]
+            Self::Lz4(codec) => codec.decode(_buffer, _raw_len),
+        }
     }
 }
 
@@ -28,7 +41,7 @@ impl CompressionCodec for Identity {
 /// dictionary, checksum, or LZ4 frame wrapper is stored in the data stream.
 #[cfg(feature = "lz4")]
 #[derive(Default)]
-pub struct Lz4 {
+pub(crate) struct Lz4 {
     scratch: Vec<u8>,
     table: Option<lz4_flex::block::CompressTable>,
 }
@@ -36,18 +49,13 @@ pub struct Lz4 {
 #[cfg(feature = "lz4")]
 impl Lz4 {
     /// Create a codec without allocating scratch buffers.
-    pub fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Self::default()
     }
 }
 
 #[cfg(feature = "lz4")]
-impl crate::sealed::Sealed for Lz4 {}
-
-#[cfg(feature = "lz4")]
-impl CompressionCodec for Lz4 {
-    const FORMAT: Compression = Compression::Lz4;
-
+impl Lz4 {
     fn encode(&mut self, buffer: &mut Vec<u8>) -> Result<()> {
         use lz4_flex::block::{CompressTable, compress_into_with_table, get_maximum_output_size};
         // The profile limits raw lengths so the codec's bound cannot overflow.

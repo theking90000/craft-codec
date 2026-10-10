@@ -1,39 +1,39 @@
-use crate::{
-    CompressionCodec, Config, EncryptionCodec, Error, FrameSizes, FrameSpec, Framing, Result,
-};
+use crate::{Config, Error, FrameSizes, FrameSpec, Metadata, Result};
+use crate::{compression::CompressionState, crypto::EncryptionState};
 
-/// Zero-sized identity transform, usable for compression, encryption, or both.
-#[derive(Clone, Copy, Debug, Default)]
-pub struct Identity;
-impl crate::sealed::Sealed for Identity {}
-
-/// Synchronous, statically dispatched frame encoder with reusable codec storage.
+/// Synchronous frame encoder constructed entirely from metadata with reusable codec storage.
 ///
 /// The caller owns the frame index and must never encrypt different payloads
 /// with the same key/index. Use a fresh key for each immutable object. This
 /// type performs no I/O, scheduling, implicit indexing, or retries.
-pub struct Encoder<C = Identity, E = Identity> {
+pub struct Encoder {
     config: Config,
-    compression: C,
-    encryption: E,
+    compression: CompressionState,
+    encryption: EncryptionState,
 }
 
-impl<C: CompressionCodec, E: EncryptionCodec> Encoder<C, E> {
-    /// Create an encoder. Codec types determine the metadata profile.
-    pub fn new(framing: Framing, compression: C, encryption: E) -> Result<Self> {
-        let config = Config::new(framing, C::FORMAT, E::FORMAT)?;
+impl TryFrom<&Metadata> for Encoder {
+    type Error = Error;
+
+    fn try_from(metadata: &Metadata) -> Result<Self> {
+        let config = metadata.config().clone();
         Ok(Self {
+            compression: CompressionState::new(config.compression())?,
+            encryption: EncryptionState::new(config.encryption())?,
             config,
-            compression,
-            encryption,
         })
     }
+}
 
-    /// Settings to use when constructing the object's metadata.
-    pub fn config(&self) -> Config {
-        self.config
+impl TryFrom<Metadata> for Encoder {
+    type Error = Error;
+
+    fn try_from(metadata: Metadata) -> Result<Self> {
+        Self::try_from(&metadata)
     }
+}
 
+impl Encoder {
     /// Replace raw bytes with stored bytes, returning lengths to append to metadata.
     /// Empty/oversized frames and out-of-policy indices are refused.
     /// On any error the buffer is cleared, but its allocation is retained.
@@ -61,25 +61,34 @@ impl<C: CompressionCodec, E: EncryptionCodec> Encoder<C, E> {
 /// Synchronous frame decoder. It knows no logical ranges or I/O offsets.
 /// Authentication precedes decompression. Reuse one instance and the caller's
 /// buffer to amortize allocations. Compression may swap the buffer allocation.
-pub struct Decoder<C = Identity, E = Identity> {
+pub struct Decoder {
     config: Config,
-    compression: C,
-    encryption: E,
+    compression: CompressionState,
+    encryption: EncryptionState,
 }
 
-impl<C: CompressionCodec, E: EncryptionCodec> Decoder<C, E> {
-    /// Create a decoder matching the object's metadata and the supplied key.
-    pub fn new(config: Config, compression: C, encryption: E) -> Result<Self> {
-        if config.compression() != C::FORMAT || config.encryption() != E::FORMAT {
-            return Err(Error::ProfileMismatch);
-        }
+impl TryFrom<&Metadata> for Decoder {
+    type Error = Error;
+
+    fn try_from(metadata: &Metadata) -> Result<Self> {
+        let config = metadata.config().clone();
         Ok(Self {
+            compression: CompressionState::new(config.compression())?,
+            encryption: EncryptionState::new(config.encryption())?,
             config,
-            compression,
-            encryption,
         })
     }
+}
 
+impl TryFrom<Metadata> for Decoder {
+    type Error = Error;
+
+    fn try_from(metadata: Metadata) -> Result<Self> {
+        Self::try_from(&metadata)
+    }
+}
+
+impl Decoder {
     /// Replace one complete stored frame with its complete decoded bytes.
     /// On failure the buffer is cleared. No unauthenticated bytes are returned.
     /// Clearing the buffer is not a promise to zero its allocation or scratch.

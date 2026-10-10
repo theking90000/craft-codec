@@ -1,7 +1,9 @@
 use crate::{Error, Result, error::buffer_len};
 
-/// Version of the headerless data format and its external metadata.
+/// Version of the headerless frame data format.
 pub const FORMAT_VERSION: u8 = 1;
+/// Metadata schema introduced in craft-codec 0.2.0. Older schemas are unsupported.
+pub const METADATA_SCHEMA_VERSION: u16 = 2;
 /// AES-GCM authentication tag length in bytes.
 pub const TAG_LEN: usize = 16;
 
@@ -43,29 +45,40 @@ pub enum Compression {
     Lz4 = 1,
 }
 
-/// Encryption identifier in trusted external metadata.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Complete encryption parameters stored in trusted external metadata.
+#[derive(Clone, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize, serde::Deserialize))]
-#[repr(u8)]
 pub enum Encryption {
     /// No authentication or encryption.
-    None = 0,
+    None,
     /// AES-256-GCM with a 96-bit frame-index nonce and a 16-byte suffix tag.
-    Aes256Gcm = 1,
+    Aes256Gcm {
+        /// Independent secret key for this immutable object, serialized with metadata.
+        key: [u8; 32],
+    },
 }
 
-impl Encryption {
-    /// Stored suffix length in bytes.
-    pub const fn tag_len(self) -> usize {
+impl std::fmt::Debug for Encryption {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::None => 0,
-            Self::Aes256Gcm => TAG_LEN,
+            Self::None => f.write_str("None"),
+            Self::Aes256Gcm { .. } => f.write_str("Aes256Gcm { key: [REDACTED] }"),
         }
     }
 }
 
-/// Validated object-wide settings. Contains no key.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+impl Encryption {
+    /// Stored suffix length in bytes.
+    pub const fn tag_len(&self) -> usize {
+        match self {
+            Self::None => 0,
+            Self::Aes256Gcm { .. } => TAG_LEN,
+        }
+    }
+}
+
+/// Validated object-wide settings, including all codec initialization parameters.
+#[derive(Clone, Debug, Eq, PartialEq)]
 #[cfg_attr(feature = "serde", derive(serde::Serialize))]
 pub struct Config {
     framing: Framing,
@@ -108,7 +121,7 @@ impl Config {
         if compression == Compression::Lz4 && max > 0x7e00_0000 {
             return Err(Error::InvalidFrameSize);
         }
-        if encryption == Encryption::Aes256Gcm && max > AES_MAX_FRAME_LEN {
+        if matches!(encryption, Encryption::Aes256Gcm { .. }) && max > AES_MAX_FRAME_LEN {
             return Err(Error::InvalidFrameSize);
         }
         Ok(Self {
@@ -119,34 +132,34 @@ impl Config {
     }
 
     /// Logical framing rule.
-    pub const fn framing(self) -> Framing {
+    pub const fn framing(&self) -> Framing {
         self.framing
     }
     /// Compression format.
-    pub const fn compression(self) -> Compression {
+    pub const fn compression(&self) -> Compression {
         self.compression
     }
     /// Encryption format.
-    pub const fn encryption(self) -> Encryption {
-        self.encryption
+    pub const fn encryption(&self) -> &Encryption {
+        &self.encryption
     }
     /// Maximum raw length, in bytes.
-    pub const fn max_frame_len(self) -> u64 {
+    pub const fn max_frame_len(&self) -> u64 {
         self.framing.max_frame_len()
     }
 
     /// Maximum frame slots for this profile. AES reserves the configured
     /// maximum length for each slot, even if an actual frame is shorter.
-    pub fn max_frames(self) -> u64 {
-        match self.encryption {
+    pub fn max_frames(&self) -> u64 {
+        match &self.encryption {
             Encryption::None => u64::MAX,
-            Encryption::Aes256Gcm => AES_MAX_BYTES
+            Encryption::Aes256Gcm { .. } => AES_MAX_BYTES
                 .checked_div(self.max_frame_len())
                 .map_or(0, |frames| AES_MAX_FRAMES.min(frames)),
         }
     }
 
-    pub(crate) fn validate_frame(self, index: u64, raw: u64, payload: u64) -> Result<()> {
+    pub(crate) fn validate_frame(&self, index: u64, raw: u64, payload: u64) -> Result<()> {
         if raw == 0 || raw > self.max_frame_len() {
             return Err(Error::InvalidFrameSize);
         }

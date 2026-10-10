@@ -1,25 +1,38 @@
-use crate::{Encryption, Identity, Result};
+use crate::{Encryption, Result};
 
-/// Sealed encryption implementation used for static dispatch.
-/// Applications normally pass [`Identity`] or, with feature `aes-gcm`, `Aes256Gcm`.
-pub trait EncryptionCodec: crate::sealed::Sealed {
-    /// Metadata format implemented by this codec.
-    const FORMAT: Encryption;
-    /// Encrypt a payload and append its tag.
-    #[doc(hidden)]
-    fn seal(&self, index: u64, buffer: &mut Vec<u8>) -> Result<()>;
-    /// Authenticate/decrypt a stored frame and remove its tag.
-    #[doc(hidden)]
-    fn open(&self, index: u64, buffer: &mut Vec<u8>) -> Result<()>;
+// Keep codec state inline so conversion requires no extra allocation.
+#[allow(clippy::large_enum_variant)]
+pub(crate) enum EncryptionState {
+    None,
+    #[cfg(feature = "aes-gcm")]
+    Aes256Gcm(Aes256Gcm),
 }
 
-impl EncryptionCodec for Identity {
-    const FORMAT: Encryption = Encryption::None;
-    fn seal(&self, _: u64, _: &mut Vec<u8>) -> Result<()> {
-        Ok(())
+impl EncryptionState {
+    pub(crate) fn new(parameters: &Encryption) -> Result<Self> {
+        match parameters {
+            Encryption::None => Ok(Self::None),
+            #[cfg(feature = "aes-gcm")]
+            Encryption::Aes256Gcm { key } => Ok(Self::Aes256Gcm(Aes256Gcm::new(key))),
+            #[cfg(not(feature = "aes-gcm"))]
+            Encryption::Aes256Gcm { .. } => Err(crate::Error::EncryptionUnavailable),
+        }
     }
-    fn open(&self, _: u64, _: &mut Vec<u8>) -> Result<()> {
-        Ok(())
+
+    pub(crate) fn seal(&self, _index: u64, _buffer: &mut Vec<u8>) -> Result<()> {
+        match self {
+            Self::None => Ok(()),
+            #[cfg(feature = "aes-gcm")]
+            Self::Aes256Gcm(codec) => codec.seal(_index, _buffer),
+        }
+    }
+
+    pub(crate) fn open(&self, _index: u64, _buffer: &mut Vec<u8>) -> Result<()> {
+        match self {
+            Self::None => Ok(()),
+            #[cfg(feature = "aes-gcm")]
+            Self::Aes256Gcm(codec) => codec.open(_index, _buffer),
+        }
     }
 }
 
@@ -27,34 +40,28 @@ impl EncryptionCodec for Identity {
 ///
 /// Use one independent key per immutable object. Never encrypt distinct payloads
 /// under the same key/index, even across encoder instances. Metadata must be
-/// trusted. Key generation and persistence belong to the caller.
+/// trusted. Key generation belongs to the caller; metadata persists the key.
 #[cfg(feature = "aes-gcm")]
-pub struct Aes256Gcm(aes_gcm::Aes256Gcm);
+pub(crate) struct Aes256Gcm(aes_gcm::Aes256Gcm);
 
 #[cfg(feature = "aes-gcm")]
 impl Aes256Gcm {
     /// Initialize the expanded key once. The caller retains responsibility for
     /// its original key bytes. The underlying cipher enables its zeroize feature.
-    pub fn new(key: &[u8; 32]) -> Self {
+    pub(crate) fn new(key: &[u8; 32]) -> Self {
         use aes_gcm::KeyInit;
         Self(aes_gcm::Aes256Gcm::new(key.into()))
     }
 }
 
 #[cfg(feature = "aes-gcm")]
-impl crate::sealed::Sealed for Aes256Gcm {}
-
-#[cfg(feature = "aes-gcm")]
 fn nonce(index: u64) -> aes_gcm::Nonce<aes_gcm::aead::consts::U12> {
-    let mut bytes = [0; 12];
-    bytes[4..].copy_from_slice(&index.to_be_bytes());
-    bytes.into()
+    let [a, b, c, d, e, f, g, h] = index.to_be_bytes();
+    [0, 0, 0, 0, a, b, c, d, e, f, g, h].into()
 }
 
 #[cfg(feature = "aes-gcm")]
-impl EncryptionCodec for Aes256Gcm {
-    const FORMAT: Encryption = Encryption::Aes256Gcm;
-
+impl Aes256Gcm {
     fn seal(&self, index: u64, buffer: &mut Vec<u8>) -> Result<()> {
         use aes_gcm::aead::AeadInOut;
         buffer

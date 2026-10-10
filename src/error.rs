@@ -10,6 +10,12 @@ pub enum Error {
     InvalidMetadata,
     /// This metadata format version is not supported.
     UnsupportedVersion,
+    /// Only the metadata schema introduced in craft-codec 0.2.0 is supported.
+    UnsupportedSchemaVersion,
+    /// The metadata requires a compression codec whose feature is disabled.
+    CompressionUnavailable,
+    /// The metadata requires an encryption codec whose feature is disabled.
+    EncryptionUnavailable,
     /// The logical range is reversed or outside the object.
     InvalidRange,
     /// A full frame was submitted after a short final frame.
@@ -40,6 +46,11 @@ impl fmt::Display for Error {
             Self::InvalidFrameSize => "invalid or unsupported frame size",
             Self::InvalidMetadata => "inconsistent frame metadata",
             Self::UnsupportedVersion => "unsupported metadata version",
+            Self::UnsupportedSchemaVersion => {
+                "unsupported metadata schema; only schema 2 introduced in craft-codec 0.2.0 is supported"
+            }
+            Self::CompressionUnavailable => "required compression codec is not enabled",
+            Self::EncryptionUnavailable => "required encryption codec is not enabled",
             Self::InvalidRange => "logical range outside the object or reversed",
             Self::FrameAfterFinal => "frame submitted after a short final frame",
             Self::InvalidStoredLength => "incorrect stored frame length",

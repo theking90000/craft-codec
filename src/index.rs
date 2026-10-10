@@ -32,7 +32,7 @@ impl Lengths {
         Ok(Self::empty(max_length))
     }
 
-    pub(crate) fn for_config(config: crate::Config) -> Self {
+    pub(crate) fn for_config(config: &crate::Config) -> Self {
         Self::empty(config.max_frame_len())
     }
 
