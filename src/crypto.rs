@@ -19,6 +19,15 @@ impl EncryptionState {
         }
     }
 
+    /// Additional buffer capacity required to seal a payload.
+    pub(crate) fn overhead(&self) -> usize {
+        match self {
+            Self::None => 0,
+            #[cfg(feature = "aes-gcm")]
+            Self::Aes256Gcm(_) => crate::TAG_LEN,
+        }
+    }
+
     pub(crate) fn seal(&self, _index: u64, _buffer: &mut Vec<u8>) -> Result<()> {
         match self {
             Self::None => Ok(()),

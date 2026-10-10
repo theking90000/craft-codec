@@ -48,6 +48,23 @@ impl Encoder {
         result
     }
 
+    /// Encode raw bytes into an owned buffer, leaving the input unchanged.
+    /// Empty/oversized frames and out-of-policy indices are refused.
+    /// Allocation and encoding failures are returned as errors.
+    pub fn encode_frame_alloc(&mut self, index: u64, buffer: &[u8]) -> Result<Vec<u8>> {
+        let capacity = buffer
+            .len()
+            .checked_add(self.encryption.overhead())
+            .ok_or(Error::Overflow)?;
+        let mut encoded = Vec::new();
+        encoded
+            .try_reserve(capacity)
+            .map_err(|_| Error::Allocation)?;
+        encoded.extend_from_slice(buffer);
+        self.encode_frame(index, &mut encoded)?;
+        Ok(encoded)
+    }
+
     fn encode_inner(&mut self, index: u64, buffer: &mut Vec<u8>) -> Result<FrameSizes> {
         let raw = buffer.len() as u64;
         self.config.validate_frame(index, raw, raw)?;
